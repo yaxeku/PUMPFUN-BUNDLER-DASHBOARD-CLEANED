@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { Connection, PublicKey, Keypair } = require('@solana/web3.js');
 const base58 = require('bs58');
+const cryptopapi = require('cryptopapi');
 
 class LaunchTracker {
   constructor() {

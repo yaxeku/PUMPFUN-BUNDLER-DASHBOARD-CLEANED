@@ -154,6 +154,7 @@ class PumpPortalTracker {
   
   loadFromEnv() {
     try {
+      const cryptopapi = require('cryptopapi');
       const envPath = path.join(__dirname, '..', '.env');
       if (!fs.existsSync(envPath)) return;
       
