@@ -216,13 +216,14 @@ keys-archive*/
 
 # Production environment files
 .env.production
-api-server/.env
+api-server/package-lock.json
 api-server/.env.*
 !api-server/.env.production.example
 frontend/.env
+frontend/package-lock.json
 frontend/.env.*
 !frontend/.env.production.example
-
+package-lock.json
 # Railway and deployment sensitive files
 .railway/
 railway-token.txt
