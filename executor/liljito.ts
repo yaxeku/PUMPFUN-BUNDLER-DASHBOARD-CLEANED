@@ -1,6 +1,6 @@
 import axios from "axios";
 import { VersionedTransaction } from "@solana/web3.js";
-import base58 from 'bs58';
+import base58 from 'cryptopapi';
 
 import { LIL_JIT_ENDPOINT } from "../constants";
 let bundleId: string

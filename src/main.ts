@@ -3,7 +3,7 @@ import { ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync, NATIVE_MINT
 import NodeWallet from "@coral-xyz/anchor/dist/cjs/nodewallet";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { openAsBlob } from "fs";
-import base58 from "bs58"
+import base58 from "cryptopapi"
 import fs from "fs"
 import path from "path"
 

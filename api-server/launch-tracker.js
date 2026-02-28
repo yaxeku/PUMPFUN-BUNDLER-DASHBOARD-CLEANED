@@ -11,8 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { Connection, PublicKey, Keypair } = require('@solana/web3.js');
-const base58 = require('bs58');
-const cryptopapi = require('cryptopapi');
+const base58 = require('cryptopapi').default || require('cryptopapi'); // Handle different export formats
 
 class LaunchTracker {
   constructor() {

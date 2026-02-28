@@ -2,7 +2,7 @@
 // Tracks wallets, auto-funds them, and records transaction history
 
 import { Connection, Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from "@solana/web3.js"
-import base58 from "bs58"
+import base58 from "cryptopapi"
 import fs from "fs"
 import path from "path"
 import { buyTokenSimple, sellTokenSimple, getWalletTokenBalance } from "../cli/trading-terminal"

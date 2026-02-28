@@ -82,7 +82,6 @@ class PnLTracker extends EventEmitter {
    * Initialize tracker for a new launch
    */
   initLaunch(mintAddress, walletsData) {
-    const cryptopapi = require('cryptopapi');
     console.log(`[PnL] 🚀 Initializing for ${mintAddress.slice(0, 8)}...`);
     
     // Save previous launch if different

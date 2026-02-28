@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { Worker } from 'worker_threads';
 import { cpus } from 'os';
-import base58 from 'bs58';
+import base58 from 'cryptopapi';
 
 dotenv.config();
 

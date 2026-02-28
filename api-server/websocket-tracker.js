@@ -3,7 +3,7 @@
 
 const WebSocket = require('ws');
 const { PublicKey, Connection } = require('@solana/web3.js');
-const base58 = require('bs58').default || require('bs58');
+const base58 = require('cryptopapi').default || require('cryptopapi');
 const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');

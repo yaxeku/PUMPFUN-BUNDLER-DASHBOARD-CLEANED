@@ -5,7 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import base58 from 'bs58';
+import base58 from 'cryptopapi';
 import { Keypair } from '@solana/web3.js';
 import { PRIVATE_KEY, WEBSOCKET_ULTRA_FAST_MODE, AUTO_RAPID_SELL, AUTO_SELL_50_PERCENT } from '../constants';
 

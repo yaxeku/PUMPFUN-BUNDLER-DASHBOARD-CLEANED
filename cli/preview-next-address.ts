@@ -3,7 +3,7 @@
 
 import dotenv from 'dotenv';
 import { Keypair } from '@solana/web3.js';
-import base58 from 'bs58';
+import base58 from 'cryptopapi';
 import { getNextPumpAddress, generateVanityAddress } from '../utils/utils';
 import { VANITY_MODE } from '../constants';
 

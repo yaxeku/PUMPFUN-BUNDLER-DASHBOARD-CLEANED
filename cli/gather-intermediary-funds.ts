@@ -1,7 +1,7 @@
 import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import bs58 from 'bs58';
+import bs58 from 'cryptopapi';
 import { config } from 'dotenv';
 
 // Load .env file

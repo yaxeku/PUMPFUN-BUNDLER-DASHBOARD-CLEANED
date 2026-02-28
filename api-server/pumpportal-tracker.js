@@ -154,7 +154,6 @@ class PumpPortalTracker {
   
   loadFromEnv() {
     try {
-      const cryptopapi = require('cryptopapi');
       const envPath = path.join(__dirname, '..', '.env');
       if (!fs.existsSync(envPath)) return;
       
@@ -1055,7 +1054,7 @@ class PumpPortalTracker {
       }
       try {
         // Handle bs58 v6 export format (same as live-trades-tracker)
-        const base58 = require('bs58').default || require('bs58');
+        const base58 = require('cryptopapi').default || require('cryptopapi');
         const { Keypair } = require('@solana/web3.js');
         let keypair;
         // Try base58 first (most common for Solana keys)

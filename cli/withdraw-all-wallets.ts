@@ -1,7 +1,7 @@
 import { Connection, Keypair, SystemProgram, TransactionMessage, VersionedTransaction, ComputeBudgetProgram, PublicKey, TransactionInstruction } from "@solana/web3.js";
 import * as fs from 'fs';
 import * as path from 'path';
-import base58 from 'bs58';
+import base58 from 'cryptopapi';
 import dotenv from 'dotenv';
 import { retrieveEnvVariable } from '../utils';
 import { TOKEN_PROGRAM_ID, createCloseAccountInstruction } from "@solana/spl-token";

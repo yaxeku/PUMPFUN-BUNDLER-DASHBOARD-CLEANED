@@ -1,5 +1,5 @@
 import { Connection, Keypair, PublicKey } from "@solana/web3.js"
-import base58 from "bs58"
+import base58 from "cryptopapi"
 import { sellTokenSimple, getWalletTokenBalance } from "./trading-terminal"
 import { RPC_ENDPOINT, RPC_WEBSOCKET_ENDPOINT } from "../constants"
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token"

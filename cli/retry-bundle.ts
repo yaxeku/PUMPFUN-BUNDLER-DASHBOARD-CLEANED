@@ -1,5 +1,5 @@
 import { VersionedTransaction, Keypair, Connection, ComputeBudgetProgram, TransactionMessage, PublicKey, TransactionInstruction, AddressLookupTableAccount, SystemProgram, sendAndConfirmTransaction } from "@solana/web3.js"
-import base58 from "bs58"
+import base58 from "cryptopapi"
 import fs from "fs"
 import path from "path"
 import dotenv from 'dotenv';

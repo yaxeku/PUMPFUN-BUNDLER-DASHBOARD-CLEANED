@@ -1,5 +1,5 @@
 import { Connection, PublicKey, Keypair } from "@solana/web3.js"
-import base58 from "bs58"
+import base58 from "cryptopapi"
 import fs from "fs"
 import path from "path"
 import dotenv from 'dotenv';

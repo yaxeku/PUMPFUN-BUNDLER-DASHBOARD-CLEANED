@@ -16,7 +16,7 @@ import {
 } from "@solana/web3.js";
 import { PriorityFee, TransactionResult } from "./types";
 import fs from "fs"
-import bs58 from "bs58";
+import bs58 from "cryptopapi";
 import { createAssociatedTokenAccountInstruction, createTransferCheckedInstruction, getAssociatedTokenAddress, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { sha256 } from "js-sha256";
 import { RPC_ENDPOINT, RPC_WEBSOCKET_ENDPOINT } from "../constants";

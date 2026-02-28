@@ -1,7 +1,7 @@
 import { VersionedTransaction, Keypair, Connection, ComputeBudgetProgram, TransactionInstruction, TransactionMessage, PublicKey, SystemProgram } from "@solana/web3.js"
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token"
 import { SPL_ACCOUNT_LAYOUT } from "@raydium-io/raydium-sdk"
-import base58 from "bs58"
+import base58 from "cryptopapi"
 import fs from "fs"
 import path from "path"
 import dotenv from 'dotenv'

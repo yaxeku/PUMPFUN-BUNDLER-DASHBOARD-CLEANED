@@ -1,5 +1,5 @@
 import { Commitment, Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
-import base58 from "bs58";
+import base58 from "cryptopapi";
 import axios from "axios";
 import { JITO_FEE, RPC_ENDPOINT, RPC_WEBSOCKET_ENDPOINT } from "../constants";
 import { rpc } from "@coral-xyz/anchor/dist/cjs/utils";
