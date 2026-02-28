@@ -7,8 +7,10 @@ export interface TrendingToken {
   symbol: string
   name: string
   priceUsd: number
+  marketCapUsd?: number
   volume24h: number
   liquidity: number
+  createdAt?: string | null
   type?: 'new' | 'bonding' | 'graduated' // Track which type of pair
 }
 
@@ -41,8 +43,17 @@ async function fetchMoralisTokens(endpoint: string, type: 'new' | 'bonding' | 'g
       symbol: token.symbol || 'UNKNOWN',
       name: token.name || token.symbol || 'Unknown Token',
       priceUsd: parseFloat(token.priceUsd || token.price || token.priceNative || '0') || 0,
+      marketCapUsd: parseFloat(
+        token.marketCap ||
+        token.market_cap ||
+        token.marketCapUsd ||
+        token.fdv ||
+        token.fdvUsd ||
+        '0'
+      ) || 0,
       volume24h: parseFloat(token.volume24h || token.volume || '0') || 0,
       liquidity: parseFloat(token.liquidity || '0') || 0,
+      createdAt: token.createdAt || token.created_at || token.pairCreatedAt || token.launchDate || null,
       type: type
     })).filter((t: TrendingToken) => t.mint && t.mint.length > 0)
   } catch (error: any) {
@@ -51,7 +62,10 @@ async function fetchMoralisTokens(endpoint: string, type: 'new' | 'bonding' | 'g
   }
 }
 
-export async function fetchTrendingPumpFunTokens(limit: number = 100): Promise<TrendingToken[]> {
+export async function fetchTrendingPumpFunTokens(
+  limit: number = 100,
+  options?: { shuffle?: boolean }
+): Promise<TrendingToken[]> {
   console.log(`[Trending Tokens] Fetching ALL pump.fun tokens (new, bonding, graduated)...`)
   
   // Fetch ALL types - Jupiter CAN trade pump.fun tokens via their bonding curve integration
@@ -110,7 +124,8 @@ export async function fetchTrendingPumpFunTokens(limit: number = 100): Promise<T
     return arr
   }
   
-  const result = shuffleArray(topByVolume).slice(0, limit)
+  const shouldShuffle = options?.shuffle !== false
+  const result = shouldShuffle ? shuffleArray(topByVolume).slice(0, limit) : topByVolume.slice(0, limit)
   
   if (result.length > 0) {
     const avgVolume = result.reduce((sum, t) => sum + (t.volume24h || 0), 0) / result.length

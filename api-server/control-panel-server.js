@@ -59,6 +59,11 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const execAsync = promisify(exec);
 const multer = require('multer');
+const runtimeHealth = {
+  startedAt: new Date().toISOString(),
+  lastUnhandledError: null,
+  lastUnhandledRejection: null,
+};
 
 // Determine project root - handles both local and Railway deployments
 // On Railway with api-server as root: __dirname = /app, project files are in /app
@@ -136,6 +141,14 @@ const upload = multer({
 // Middleware
 app.use(cors());
 
+// Attach request IDs for traceable, professional error handling
+app.use((req, res, next) => {
+  const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  req.requestId = requestId;
+  res.setHeader('x-request-id', requestId);
+  next();
+});
+
 // ============================================================
 // 🔒 SECURITY: ACCESS CONTROL
 // ============================================================
@@ -188,6 +201,9 @@ app.get('/api/health', (req, res) => {
     mode: isProduction ? 'production' : 'local',
     timestamp: new Date().toISOString(),
     security: 'Private keys never accepted by this server',
+    requestId: req.requestId,
+    uptimeSeconds: Math.round(process.uptime()),
+    runtimeHealth,
   });
 });
 
@@ -3072,6 +3088,7 @@ app.post('/api/command', async (req, res) => {
     
     // Map command names to npm scripts
     const commandMap = {
+      'volume-maker': 'volume-maker',
       'rapid-sell': 'rapid-sell',
       'rapid-sell-holders': 'rapid-sell-holders',
       'rapid-sell-50-percent': 'rapid-sell-50-percent',
@@ -3113,8 +3130,10 @@ app.post('/api/command', async (req, res) => {
     
     // Execute command in background
     // For long-running commands like gather/gather-all, set a longer timeout
-    const longRunningCommands = ['gather', 'gather-new-only', 'gather-all', 'gather-last', 'rapid-sell', 'rapid-sell-50-percent', 'rapid-sell-remaining'];
+    const longRunningCommands = ['volume-maker', 'gather', 'gather-new-only', 'gather-all', 'gather-last', 'rapid-sell', 'rapid-sell-50-percent', 'rapid-sell-remaining'];
     const timeoutMs = longRunningCommands.includes(command) ? 300000 : 60000; // 5 minutes for gather, 1 minute for others
+
+    broadcastProgress('stdout', `🚀 Command started: ${command}`);
     
     const childProcess = exec(commandToRun, { 
       cwd: projectRoot, // Use project root, not api-server directory
@@ -3130,6 +3149,7 @@ app.post('/api/command', async (req, res) => {
       if (!childProcess.killed) {
         console.log(`[Command] Command ${command} timed out after ${timeoutMs}ms, killing process...`);
         childProcess.kill('SIGTERM');
+        broadcastProgress('stderr', `⚠️ Command timed out: ${command} after ${timeoutMs / 1000}s`);
         res.json({
           success: false,
           exitCode: -1,
@@ -3143,17 +3163,20 @@ app.post('/api/command', async (req, res) => {
       const dataStr = data.toString();
       output += dataStr;
       console.log(`[Command ${command}] stdout:`, dataStr.trim());
+      broadcastProgress('stdout', dataStr);
     });
     
     childProcess.stderr.on('data', (data) => {
       const dataStr = data.toString();
       errorOutput += dataStr;
       console.log(`[Command ${command}] stderr:`, dataStr.trim());
+      broadcastProgress('stderr', dataStr);
     });
     
     childProcess.on('close', (code) => {
       clearTimeout(timeout);
       console.log(`[Command ${command}] Process exited with code ${code}`);
+      broadcastProgress('stdout', `✅ Command finished: ${command} (exit ${code})`);
       
       // AUTO-CLEANUP: After gather commands complete successfully, unsubscribe from PumpPortal
       const gatherCommands = ['gather', 'gather-new-only', 'gather-all', 'gather-last'];
@@ -3186,6 +3209,7 @@ app.post('/api/command', async (req, res) => {
     childProcess.on('error', (error) => {
       clearTimeout(timeout);
       console.error(`[Command ${command}] Process error:`, error);
+      broadcastProgress('stderr', `❌ Command error: ${command} - ${error.message}`);
       res.status(500).json({ success: false, error: error.message });
     });
   } catch (error) {
@@ -3207,6 +3231,201 @@ app.get('/api/current-run', (req, res) => {
   } catch (error) {
     console.error('[Current Run] Error:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Set active token for existing-token pumping flows
+app.post('/api/current-run/set-active-token', (req, res) => {
+  try {
+    const { mintAddress, walletSource = 'auto' } = req.body || {};
+
+    if (!mintAddress || typeof mintAddress !== 'string') {
+      return res.status(400).json({ success: false, error: 'mintAddress is required' });
+    }
+
+    let normalizedMintAddress = '';
+    try {
+      normalizedMintAddress = new PublicKey(mintAddress.trim()).toBase58();
+    } catch (error) {
+      return res.status(400).json({ success: false, error: 'Invalid mint address' });
+    }
+
+    const env = readEnvFile();
+    const configuredBundleCount = Math.max(0, parseInt(env.BUNDLE_WALLET_COUNT || '0', 10) || 0);
+    const configuredHolderCount = Math.max(0, parseInt(env.HOLDER_WALLET_COUNT || '0', 10) || 0);
+    const wantedWallets = configuredBundleCount + configuredHolderCount;
+
+    const isValidPrivateKey = (privateKey) => {
+      if (!privateKey || typeof privateKey !== 'string') return false;
+      try {
+        Keypair.fromSecretKey(base58.decode(privateKey));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const uniqueValidKeys = (keys = []) => {
+      const seen = new Set();
+      const output = [];
+      for (const key of keys) {
+        if (!isValidPrivateKey(key)) continue;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        output.push(key);
+      }
+      return output;
+    };
+
+    const splitBySettings = (keys = []) => {
+      const validKeys = uniqueValidKeys(keys);
+      const bundle = validKeys.slice(0, configuredBundleCount);
+      const holder = validKeys.slice(configuredBundleCount, configuredBundleCount + configuredHolderCount);
+      return { validKeys, bundle, holder };
+    };
+
+    const currentRunPath = path.join(__dirname, '..', 'keys', 'current-run.json');
+    const warmedWalletsPath = path.join(__dirname, '..', 'keys', 'warmed-wallets.json');
+
+    let existingRun = null;
+    if (fs.existsSync(currentRunPath)) {
+      try {
+        existingRun = JSON.parse(fs.readFileSync(currentRunPath, 'utf8'));
+      } catch {
+        existingRun = null;
+      }
+    }
+
+    let warmedWalletKeys = [];
+    if (fs.existsSync(warmedWalletsPath)) {
+      try {
+        const warmed = JSON.parse(fs.readFileSync(warmedWalletsPath, 'utf8'));
+        const warmedWallets = Array.isArray(warmed?.wallets) ? warmed.wallets : [];
+        warmedWalletKeys = warmedWallets
+          .map((wallet) => wallet?.privateKey)
+          .filter(Boolean);
+      } catch {
+        warmedWalletKeys = [];
+      }
+    }
+
+    const existingBundleKeys = Array.isArray(existingRun?.bundleWalletKeys) ? existingRun.bundleWalletKeys : [];
+    const existingHolderKeys = Array.isArray(existingRun?.holderWalletKeys) ? existingRun.holderWalletKeys : [];
+    const existingFlatKeys = Array.isArray(existingRun?.walletKeys) ? existingRun.walletKeys : [];
+    const existingAllKeys = uniqueValidKeys([...existingBundleKeys, ...existingHolderKeys, ...existingFlatKeys]);
+    const allAvailableKeys = uniqueValidKeys([...existingAllKeys, ...warmedWalletKeys]);
+
+    if (allAvailableKeys.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No wallets available. Launch once or create warmed wallets first.'
+      });
+    }
+
+    let walletKeys = [];
+    let bundleWalletKeys = [];
+    let holderWalletKeys = [];
+    const warnings = [];
+
+    if (walletSource === 'all-wallets') {
+      walletKeys = allAvailableKeys;
+      bundleWalletKeys = [...walletKeys];
+      holderWalletKeys = [];
+      if (configuredHolderCount > 0) {
+        warnings.push('All wallets mode selected: holder split is ignored and all wallets are used for pumping.');
+      }
+    } else {
+      const candidatePool = allAvailableKeys;
+      if (wantedWallets > 0 && candidatePool.length < wantedWallets) {
+        warnings.push(`Configured ${wantedWallets} wallets but only ${candidatePool.length} available. Using available wallets.`);
+      }
+
+      const selected = wantedWallets > 0 ? candidatePool.slice(0, wantedWallets) : candidatePool;
+      const split = splitBySettings(selected);
+      walletKeys = split.validKeys;
+      bundleWalletKeys = split.bundle;
+      holderWalletKeys = split.holder;
+    }
+
+    if (walletKeys.length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid wallets found for selected source' });
+    }
+
+    const creatorDevWalletKey = '';
+
+    const updatedRun = {
+      ...(existingRun || {}),
+      mintAddress: normalizedMintAddress,
+      launchStatus: 'SUCCESS',
+      runType: 'existing-token',
+      hasDevWallet: false,
+      walletSource: walletSource === 'all-wallets' ? 'all-wallets' : 'auto',
+      walletKeys,
+      bundleWalletKeys,
+      holderWalletKeys,
+      creatorDevWalletKey,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const keysDir = path.join(__dirname, '..', 'keys');
+    if (!fs.existsSync(keysDir)) {
+      fs.mkdirSync(keysDir, { recursive: true });
+    }
+    fs.writeFileSync(currentRunPath, JSON.stringify(updatedRun, null, 2));
+
+    return res.json({
+      success: true,
+      data: updatedRun,
+      warnings,
+      summary: {
+        walletSource: updatedRun.walletSource,
+        totalWallets: walletKeys.length,
+        bundleWallets: bundleWalletKeys.length,
+        holderWallets: holderWalletKeys.length,
+        configuredBundleCount,
+        configuredHolderCount,
+      },
+    });
+  } catch (error) {
+    console.error('[Set Active Token] Error:', error);
+    return res.status(500).json({ success: false, error: error.message || 'Failed to set active token' });
+  }
+});
+
+// Clear active token from current run (used when user clears token in UI)
+app.post('/api/current-run/clear-active-token', (req, res) => {
+  try {
+    const currentRunPath = path.join(__dirname, '..', 'keys', 'current-run.json');
+
+    if (!fs.existsSync(currentRunPath)) {
+      return res.json({ success: true, data: null, message: 'No current run file to clear' });
+    }
+
+    let existingRun = {};
+    try {
+      existingRun = JSON.parse(fs.readFileSync(currentRunPath, 'utf8'));
+    } catch {
+      existingRun = {};
+    }
+
+    const updatedRun = {
+      ...existingRun,
+      mintAddress: '',
+      runType: existingRun.runType === 'existing-token' ? '' : existingRun.runType,
+      launchStatus: 'IDLE',
+      updatedAt: new Date().toISOString(),
+    };
+
+    fs.writeFileSync(currentRunPath, JSON.stringify(updatedRun, null, 2));
+
+    return res.json({
+      success: true,
+      data: updatedRun,
+      message: 'Active token cleared successfully',
+    });
+  } catch (error) {
+    console.error('[Clear Active Token] Error:', error);
+    return res.status(500).json({ success: false, error: error.message || 'Failed to clear active token' });
   }
 });
 
@@ -4147,7 +4366,7 @@ app.post('/api/warming-wallets/update-balances', async (req, res) => {
     // SECURITY: Don't log request body - may contain private keys
     // console.log('[Warming] Request body:', req.body);
     
-    const { walletAddresses } = req.body;
+    const { walletAddresses, reserveSol, passes } = req.body;
     
     if (!walletAddresses || !Array.isArray(walletAddresses) || walletAddresses.length === 0) {
       console.log('[Warming] Invalid request: walletAddresses missing or empty');
@@ -4190,7 +4409,10 @@ app.post('/api/warming-wallets/gather-sol', async (req, res) => {
     
     console.log(`[Warming] Gathering SOL from ${walletAddresses.length} wallet(s)...`);
     const { gatherSolFromWallets } = require(projectPath('src', 'wallet-warming-manager.ts'));
-    const result = await gatherSolFromWallets(walletAddresses);
+    const result = await gatherSolFromWallets(walletAddresses, {
+      reserveSol: reserveSol !== undefined ? Number(reserveSol) : undefined,
+      passes: passes !== undefined ? Number(passes) : undefined,
+    });
     
     console.log(`[Warming] Gather complete: ${result.gathered} gathered, ${result.failed} failed, total: ${result.totalSolGathered.toFixed(6)} SOL`);
     res.json({
@@ -4211,7 +4433,7 @@ app.post('/api/warming-wallets/gather-sol', async (req, res) => {
 // Withdraw all SOL from a single wallet to funding wallet
 app.post('/api/warming-wallets/withdraw-sol', async (req, res) => {
   try {
-    const { walletAddress } = req.body;
+    const { walletAddress, reserveSol, passes } = req.body;
     
     if (!walletAddress) {
       return res.status(400).json({ success: false, error: 'Wallet address is required' });
@@ -4251,38 +4473,52 @@ app.post('/api/warming-wallets/withdraw-sol', async (req, res) => {
     const balance = await connection.getBalance(walletKp.publicKey);
     const balanceSol = balance / 1e9;
     
-    // Keep 0.001 SOL for rent exemption
-    const rentExemption = 0.001;
-    const amountToTransfer = balanceSol - rentExemption;
+    const requestedReserve = Number(reserveSol ?? 0.00005);
+    const reserveBalance = Number.isFinite(requestedReserve) ? Math.max(0.00001, Math.min(0.01, requestedReserve)) : 0.00005;
+    const feeBuffer = 0.00001;
+    const maxPasses = Math.max(1, Math.min(3, Number(passes || 2)));
+    let totalTransferred = 0;
+    let lastTxSig = null;
     
-    if (amountToTransfer <= 0) {
+    if (balanceSol - reserveBalance - feeBuffer <= 0) {
       return res.json({
         success: true,
-        message: `Insufficient balance (${balanceSol.toFixed(6)} SOL) - keeping ${rentExemption} SOL for rent`,
+        message: `Insufficient balance (${balanceSol.toFixed(6)} SOL) - keeping ${reserveBalance} SOL reserve`,
         amountTransferred: 0,
         balance: balanceSol
       });
     }
-    
-    console.log(`[Warming] Withdrawing ${amountToTransfer.toFixed(6)} SOL from ${walletAddress.substring(0, 8)}...`);
-    
-    const latestBlockhash = await connection.getLatestBlockhash('confirmed');
-    const transferMsg = new TransactionMessage({
-      payerKey: walletKp.publicKey,
-      recentBlockhash: latestBlockhash.blockhash,
-      instructions: [
-        SystemProgram.transfer({
-          fromPubkey: walletKp.publicKey,
-          toPubkey: mainKp.publicKey,
-          lamports: Math.floor(amountToTransfer * 1e9)
-        })
-      ]
-    }).compileToV0Message();
-    
-    const transferTx = new VersionedTransaction(transferMsg);
-    transferTx.sign([walletKp]);
-    
-    const sig = await connection.sendTransaction(transferTx, { skipPreflight: true, maxRetries: 3 });
+
+    for (let pass = 1; pass <= maxPasses; pass++) {
+      const currentBalanceLamports = await connection.getBalance(walletKp.publicKey);
+      const amountLamports = currentBalanceLamports - Math.floor(reserveBalance * 1e9) - Math.floor(feeBuffer * 1e9);
+      if (amountLamports <= 0) {
+        break;
+      }
+
+      const amountToTransfer = amountLamports / 1e9;
+      console.log(`[Warming] Withdrawing ${amountToTransfer.toFixed(6)} SOL from ${walletAddress.substring(0, 8)}... (pass ${pass}/${maxPasses})`);
+
+      const latestBlockhash = await connection.getLatestBlockhash('confirmed');
+      const transferMsg = new TransactionMessage({
+        payerKey: walletKp.publicKey,
+        recentBlockhash: latestBlockhash.blockhash,
+        instructions: [
+          SystemProgram.transfer({
+            fromPubkey: walletKp.publicKey,
+            toPubkey: mainKp.publicKey,
+            lamports: amountLamports
+          })
+        ]
+      }).compileToV0Message();
+
+      const transferTx = new VersionedTransaction(transferMsg);
+      transferTx.sign([walletKp]);
+
+      lastTxSig = await connection.sendTransaction(transferTx, { skipPreflight: true, maxRetries: 3 });
+      totalTransferred += amountToTransfer;
+      await new Promise(resolve => setTimeout(resolve, 350));
+    }
     
     // Update balance in wallet record from blockchain (more accurate)
     try {
@@ -4294,7 +4530,8 @@ app.post('/api/warming-wallets/withdraw-sol', async (req, res) => {
       // Fallback to estimated balance
       const walletIndex = wallets.findIndex(w => w.address === walletAddress);
       if (walletIndex >= 0) {
-        wallets[walletIndex].solBalance = rentExemption;
+        const refreshedBalance = await connection.getBalance(walletKp.publicKey);
+        wallets[walletIndex].solBalance = refreshedBalance / 1e9;
         wallets[walletIndex].lastBalanceUpdate = new Date().toISOString();
         const { saveWarmedWallets } = require(projectPath('src', 'wallet-warming-manager.ts'));
         saveWarmedWallets(wallets);
@@ -4303,11 +4540,11 @@ app.post('/api/warming-wallets/withdraw-sol', async (req, res) => {
     
     res.json({
       success: true,
-      message: `Withdrew ${amountToTransfer.toFixed(6)} SOL to funding wallet`,
-      amountTransferred: amountToTransfer,
+      message: `Withdrew ${totalTransferred.toFixed(6)} SOL to funding wallet`,
+      amountTransferred: totalTransferred,
       balance: balanceSol,
-      remainingBalance: rentExemption,
-      txUrl: `https://solscan.io/tx/${sig}`
+      remainingBalance: (await connection.getBalance(walletKp.publicKey)) / 1e9,
+      txUrl: lastTxSig ? `https://solscan.io/tx/${lastTxSig}` : null
     });
   } catch (error) {
     console.error('[Warming] Withdraw SOL error:', error);
@@ -4384,7 +4621,6 @@ app.post('/api/warm-wallets/start', async (req, res) => {
       tradesPerWallet: config?.tradesPerWallet || 2, // Just 2 trades is enough to show activity
       minBuyAmount: config?.minBuyAmount || 0.0002, // 0.0002 SOL (ultra-small, may need to verify Jupiter accepts)
       maxBuyAmount: config?.maxBuyAmount || 0.0003, // 0.0003 SOL (ultra-small for cheap warming)
-      tradingPattern: config?.tradingPattern || 'sequential', // 'sequential', 'randomized', 'accumulate'
       minIntervalSeconds: config?.minIntervalSeconds || 10,
       maxIntervalSeconds: config?.maxIntervalSeconds || 60,
       priorityFee: config?.priorityFee || 'none', // No priority fee for warming (saves ~0.003 SOL per round trip)
@@ -4393,7 +4629,11 @@ app.post('/api/warm-wallets/start', async (req, res) => {
       fundingAmount: config?.fundingAmount || 0.015, // Enough for 2 trades + fees
       skipFunding: config?.skipFunding || false, // Skip funding for wallets with existing balance
       closeTokenAccounts: config?.closeTokenAccounts !== undefined ? config.closeTokenAccounts : true, // Default: close accounts to recover rent. Set false for cheap mode (sells 99.9%, keeps dust)
-      tradingPattern: config?.tradingPattern || 'sequential' // 'sequential', 'randomized', 'accumulate'
+      tradingPattern: config?.tradingPattern || 'sequential', // 'sequential', 'randomized', 'accumulate'
+      enableSniping: config?.enableSniping === true,
+      snipingStopLossPercent: config?.snipingStopLossPercent !== undefined ? Number(config.snipingStopLossPercent) : 25,
+      snipingSellPercent: config?.snipingSellPercent !== undefined ? Number(config.snipingSellPercent) : 100,
+      prefetchedTrendingTokens: Array.isArray(config?.prefetchedTrendingTokens) ? config.prefetchedTrendingTokens : undefined,
     };
     
     // Ensure tradingPattern is set (default to sequential if not provided)
@@ -9638,6 +9878,54 @@ app.post('/api/private-funding/recover-intermediary', async (req, res) => {
 // The frontend connects directly to that service when enabled.
 // =====================================================
 
+// 404 handler for consistent API responses
+app.use((req, res, next) => {
+  if (res.headersSent) {
+    return next();
+  }
+
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({
+      success: false,
+      error: 'Endpoint not found',
+      path: req.path,
+      method: req.method,
+      requestId: req.requestId,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  next();
+});
+
+// Global error handler for uncaught route/middleware errors
+app.use((error, req, res, next) => {
+  const statusCode = error?.statusCode && Number.isInteger(error.statusCode)
+    ? error.statusCode
+    : 500;
+  const message = error?.message || 'Internal server error';
+
+  console.error('[Global Error Handler]', {
+    requestId: req?.requestId,
+    method: req?.method,
+    path: req?.path,
+    statusCode,
+    message,
+    stack: error?.stack,
+  });
+
+  if (res.headersSent) {
+    return next(error);
+  }
+
+  res.status(statusCode).json({
+    success: false,
+    error: message,
+    requestId: req?.requestId,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 const server = app.listen(PORT, () => {
   console.log(`🚀 Control Panel API Server running on http://localhost:${PORT}`);
   console.log(`📁 Working directory: ${process.cwd()}`);
@@ -9681,3 +9969,19 @@ const gracefulShutdown = (signal) => {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+process.on('unhandledRejection', (reason) => {
+  runtimeHealth.lastUnhandledRejection = {
+    timestamp: new Date().toISOString(),
+    reason: reason instanceof Error ? reason.message : String(reason),
+  };
+  console.error('[UnhandledRejection]', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  runtimeHealth.lastUnhandledError = {
+    timestamp: new Date().toISOString(),
+    message: error?.message || 'Unknown uncaught exception',
+  };
+  console.error('[UncaughtException]', error);
+});

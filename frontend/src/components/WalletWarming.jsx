@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import apiService from '../services/api';
 
 export default function WalletWarming() {
@@ -16,7 +16,19 @@ export default function WalletWarming() {
     skipFunding: true,
     closeTokenAccounts: true, // Default: close accounts to recover rent. Set false for cheap mode (build many tx cheaply)
     tradingPattern: 'sequential', // 'sequential', 'randomized', 'accumulate' - pattern for executing trades
-    walletsPerBatch: 2 // How many wallets to process in parallel (already runs in parallel!)
+    walletsPerBatch: 2, // How many wallets to process in parallel (already runs in parallel!)
+    enableSniping: false,
+    snipingMaxTokenAgeHours: 6,
+    snipingMinMarketCapUsd: 20000,
+    snipingMaxMarketCapUsd: 0,
+    snipingMinLiquidityUsd: 5000,
+    snipingMinVolume24hUsd: 5000,
+    snipingIncludeNew: true,
+    snipingIncludeBonding: true,
+    snipingIncludeGraduated: true,
+    snipingMaxCandidates: 50,
+    snipingStopLossPercent: 25,
+    snipingSellPercent: 100
   });
   const [selectedWallets, setSelectedWallets] = useState([]);
   const [trendingStatus, setTrendingStatus] = useState({ loading: false, lastFetch: null, error: null });
@@ -47,6 +59,7 @@ export default function WalletWarming() {
   const [showFundingModal, setShowFundingModal] = useState(false);
   const [fundingAmount, setFundingAmount] = useState('0.02');
   const [fundingLoading, setFundingLoading] = useState(false);
+  const [withdrawKeepReserve, setWithdrawKeepReserve] = useState(false);
   
   // Private Funding (SOL -> ETH -> SOL) State
   const [showPrivateFunding, setShowPrivateFunding] = useState(false);
@@ -74,6 +87,12 @@ export default function WalletWarming() {
   
   // Track recently created wallets (show at top with NEW badge)
   const [recentlyCreated, setRecentlyCreated] = useState([]);
+  const [snipingSaveStatus, setSnipingSaveStatus] = useState('');
+  const [snipingPreset, setSnipingPreset] = useState('balanced');
+  const [autoPresetCustomOnManualEdit, setAutoPresetCustomOnManualEdit] = useState(true);
+  const snipingSettingsLoadedRef = useRef(false);
+  const snipingSaveTimeoutRef = useRef(null);
+  const lastSavedSnipingFingerprintRef = useRef('');
 
   // Available tag colors
   const tagColors = [
@@ -92,14 +111,194 @@ export default function WalletWarming() {
     loadWallets(true);
     loadTrendingTokens();
     loadFundingWallet();
+    loadPersistedSnipingSettings();
     
     // Periodic refresh (every 10s) - just reload cached data, not blockchain refresh
     const interval = setInterval(() => {
       loadWallets(false);
       loadFundingWallet();
     }, 10000);
-    return () => clearInterval(interval);
+
+    const handleSettingsUpdated = () => {
+      loadPersistedSnipingSettings();
+    };
+    window.addEventListener('settings-updated', handleSettingsUpdated);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('settings-updated', handleSettingsUpdated);
+      if (snipingSaveTimeoutRef.current) {
+        clearTimeout(snipingSaveTimeoutRef.current);
+      }
+    };
   }, []);
+
+  const loadPersistedSnipingSettings = async () => {
+    try {
+      const res = await apiService.getSettings();
+      const persisted = res?.data?.settings || {};
+
+      setConfig((prev) => ({
+        ...prev,
+        enableSniping: persisted.WARM_SNIPING_ENABLED !== undefined
+          ? (persisted.WARM_SNIPING_ENABLED === 'true' || persisted.WARM_SNIPING_ENABLED === true)
+          : prev.enableSniping,
+        snipingMaxTokenAgeHours: persisted.WARM_SNIPING_MAX_TOKEN_AGE_HOURS !== undefined
+          ? Number(persisted.WARM_SNIPING_MAX_TOKEN_AGE_HOURS)
+          : prev.snipingMaxTokenAgeHours,
+        snipingMinMarketCapUsd: persisted.WARM_SNIPING_MIN_MARKET_CAP_USD !== undefined
+          ? Number(persisted.WARM_SNIPING_MIN_MARKET_CAP_USD)
+          : prev.snipingMinMarketCapUsd,
+        snipingMaxMarketCapUsd: persisted.WARM_SNIPING_MAX_MARKET_CAP_USD !== undefined
+          ? Number(persisted.WARM_SNIPING_MAX_MARKET_CAP_USD)
+          : prev.snipingMaxMarketCapUsd,
+        snipingMinLiquidityUsd: persisted.WARM_SNIPING_MIN_LIQUIDITY_USD !== undefined
+          ? Number(persisted.WARM_SNIPING_MIN_LIQUIDITY_USD)
+          : prev.snipingMinLiquidityUsd,
+        snipingMinVolume24hUsd: persisted.WARM_SNIPING_MIN_VOLUME_24H_USD !== undefined
+          ? Number(persisted.WARM_SNIPING_MIN_VOLUME_24H_USD)
+          : prev.snipingMinVolume24hUsd,
+        snipingIncludeNew: persisted.WARM_SNIPING_INCLUDE_NEW !== undefined
+          ? (persisted.WARM_SNIPING_INCLUDE_NEW === 'true' || persisted.WARM_SNIPING_INCLUDE_NEW === true)
+          : prev.snipingIncludeNew,
+        snipingIncludeBonding: persisted.WARM_SNIPING_INCLUDE_BONDING !== undefined
+          ? (persisted.WARM_SNIPING_INCLUDE_BONDING === 'true' || persisted.WARM_SNIPING_INCLUDE_BONDING === true)
+          : prev.snipingIncludeBonding,
+        snipingIncludeGraduated: persisted.WARM_SNIPING_INCLUDE_GRADUATED !== undefined
+          ? (persisted.WARM_SNIPING_INCLUDE_GRADUATED === 'true' || persisted.WARM_SNIPING_INCLUDE_GRADUATED === true)
+          : prev.snipingIncludeGraduated,
+        snipingMaxCandidates: persisted.WARM_SNIPING_MAX_CANDIDATES !== undefined
+          ? Number(persisted.WARM_SNIPING_MAX_CANDIDATES)
+          : prev.snipingMaxCandidates,
+        snipingStopLossPercent: persisted.WARM_SNIPING_STOP_LOSS_PERCENT !== undefined
+          ? Number(persisted.WARM_SNIPING_STOP_LOSS_PERCENT)
+          : prev.snipingStopLossPercent,
+        snipingSellPercent: persisted.WARM_SNIPING_SELL_PERCENT !== undefined
+          ? Number(persisted.WARM_SNIPING_SELL_PERCENT)
+          : prev.snipingSellPercent,
+      }));
+
+      const loadedPayload = {
+        WARM_SNIPING_ENABLED: persisted.WARM_SNIPING_ENABLED !== undefined
+          ? (persisted.WARM_SNIPING_ENABLED === 'true' || persisted.WARM_SNIPING_ENABLED === true)
+          : config.enableSniping,
+        WARM_SNIPING_MAX_TOKEN_AGE_HOURS: persisted.WARM_SNIPING_MAX_TOKEN_AGE_HOURS !== undefined
+          ? Number(persisted.WARM_SNIPING_MAX_TOKEN_AGE_HOURS)
+          : config.snipingMaxTokenAgeHours,
+        WARM_SNIPING_MIN_MARKET_CAP_USD: persisted.WARM_SNIPING_MIN_MARKET_CAP_USD !== undefined
+          ? Number(persisted.WARM_SNIPING_MIN_MARKET_CAP_USD)
+          : config.snipingMinMarketCapUsd,
+        WARM_SNIPING_MAX_MARKET_CAP_USD: persisted.WARM_SNIPING_MAX_MARKET_CAP_USD !== undefined
+          ? Number(persisted.WARM_SNIPING_MAX_MARKET_CAP_USD)
+          : config.snipingMaxMarketCapUsd,
+        WARM_SNIPING_MIN_LIQUIDITY_USD: persisted.WARM_SNIPING_MIN_LIQUIDITY_USD !== undefined
+          ? Number(persisted.WARM_SNIPING_MIN_LIQUIDITY_USD)
+          : config.snipingMinLiquidityUsd,
+        WARM_SNIPING_MIN_VOLUME_24H_USD: persisted.WARM_SNIPING_MIN_VOLUME_24H_USD !== undefined
+          ? Number(persisted.WARM_SNIPING_MIN_VOLUME_24H_USD)
+          : config.snipingMinVolume24hUsd,
+        WARM_SNIPING_INCLUDE_NEW: persisted.WARM_SNIPING_INCLUDE_NEW !== undefined
+          ? (persisted.WARM_SNIPING_INCLUDE_NEW === 'true' || persisted.WARM_SNIPING_INCLUDE_NEW === true)
+          : config.snipingIncludeNew,
+        WARM_SNIPING_INCLUDE_BONDING: persisted.WARM_SNIPING_INCLUDE_BONDING !== undefined
+          ? (persisted.WARM_SNIPING_INCLUDE_BONDING === 'true' || persisted.WARM_SNIPING_INCLUDE_BONDING === true)
+          : config.snipingIncludeBonding,
+        WARM_SNIPING_INCLUDE_GRADUATED: persisted.WARM_SNIPING_INCLUDE_GRADUATED !== undefined
+          ? (persisted.WARM_SNIPING_INCLUDE_GRADUATED === 'true' || persisted.WARM_SNIPING_INCLUDE_GRADUATED === true)
+          : config.snipingIncludeGraduated,
+        WARM_SNIPING_MAX_CANDIDATES: persisted.WARM_SNIPING_MAX_CANDIDATES !== undefined
+          ? Number(persisted.WARM_SNIPING_MAX_CANDIDATES)
+          : config.snipingMaxCandidates,
+        WARM_SNIPING_STOP_LOSS_PERCENT: persisted.WARM_SNIPING_STOP_LOSS_PERCENT !== undefined
+          ? Number(persisted.WARM_SNIPING_STOP_LOSS_PERCENT)
+          : config.snipingStopLossPercent,
+        WARM_SNIPING_SELL_PERCENT: persisted.WARM_SNIPING_SELL_PERCENT !== undefined
+          ? Number(persisted.WARM_SNIPING_SELL_PERCENT)
+          : config.snipingSellPercent,
+      };
+      lastSavedSnipingFingerprintRef.current = JSON.stringify({
+        ...loadedPayload,
+        WARM_SNIPING_ENABLED: loadedPayload.WARM_SNIPING_ENABLED ? 'true' : 'false',
+        WARM_SNIPING_MAX_TOKEN_AGE_HOURS: String(loadedPayload.WARM_SNIPING_MAX_TOKEN_AGE_HOURS),
+        WARM_SNIPING_MIN_MARKET_CAP_USD: String(loadedPayload.WARM_SNIPING_MIN_MARKET_CAP_USD),
+        WARM_SNIPING_MAX_MARKET_CAP_USD: String(loadedPayload.WARM_SNIPING_MAX_MARKET_CAP_USD),
+        WARM_SNIPING_MIN_LIQUIDITY_USD: String(loadedPayload.WARM_SNIPING_MIN_LIQUIDITY_USD),
+        WARM_SNIPING_MIN_VOLUME_24H_USD: String(loadedPayload.WARM_SNIPING_MIN_VOLUME_24H_USD),
+        WARM_SNIPING_INCLUDE_NEW: loadedPayload.WARM_SNIPING_INCLUDE_NEW ? 'true' : 'false',
+        WARM_SNIPING_INCLUDE_BONDING: loadedPayload.WARM_SNIPING_INCLUDE_BONDING ? 'true' : 'false',
+        WARM_SNIPING_INCLUDE_GRADUATED: loadedPayload.WARM_SNIPING_INCLUDE_GRADUATED ? 'true' : 'false',
+        WARM_SNIPING_MAX_CANDIDATES: String(loadedPayload.WARM_SNIPING_MAX_CANDIDATES),
+        WARM_SNIPING_STOP_LOSS_PERCENT: String(loadedPayload.WARM_SNIPING_STOP_LOSS_PERCENT),
+        WARM_SNIPING_SELL_PERCENT: String(loadedPayload.WARM_SNIPING_SELL_PERCENT),
+      });
+
+      snipingSettingsLoadedRef.current = true;
+      setSnipingSaveStatus('');
+    } catch (error) {
+      console.error('Failed to load persisted sniping settings:', error);
+      setSnipingSaveStatus('error');
+    }
+  };
+
+  useEffect(() => {
+    if (!snipingSettingsLoadedRef.current) {
+      return;
+    }
+
+    const payload = {
+      WARM_SNIPING_ENABLED: config.enableSniping ? 'true' : 'false',
+      WARM_SNIPING_MAX_TOKEN_AGE_HOURS: String(config.snipingMaxTokenAgeHours),
+      WARM_SNIPING_MIN_MARKET_CAP_USD: String(config.snipingMinMarketCapUsd),
+      WARM_SNIPING_MAX_MARKET_CAP_USD: String(config.snipingMaxMarketCapUsd),
+      WARM_SNIPING_MIN_LIQUIDITY_USD: String(config.snipingMinLiquidityUsd),
+      WARM_SNIPING_MIN_VOLUME_24H_USD: String(config.snipingMinVolume24hUsd),
+      WARM_SNIPING_INCLUDE_NEW: config.snipingIncludeNew ? 'true' : 'false',
+      WARM_SNIPING_INCLUDE_BONDING: config.snipingIncludeBonding ? 'true' : 'false',
+      WARM_SNIPING_INCLUDE_GRADUATED: config.snipingIncludeGraduated ? 'true' : 'false',
+      WARM_SNIPING_MAX_CANDIDATES: String(config.snipingMaxCandidates),
+      WARM_SNIPING_STOP_LOSS_PERCENT: String(config.snipingStopLossPercent),
+      WARM_SNIPING_SELL_PERCENT: String(config.snipingSellPercent),
+    };
+
+    const fingerprint = JSON.stringify(payload);
+    if (fingerprint === lastSavedSnipingFingerprintRef.current) {
+      return;
+    }
+
+    if (snipingSaveTimeoutRef.current) {
+      clearTimeout(snipingSaveTimeoutRef.current);
+    }
+
+    setSnipingSaveStatus('saving');
+
+    snipingSaveTimeoutRef.current = setTimeout(async () => {
+      try {
+        await apiService.updateSettings(payload);
+        lastSavedSnipingFingerprintRef.current = fingerprint;
+        setSnipingSaveStatus('saved');
+        setTimeout(() => {
+          setSnipingSaveStatus((prev) => (prev === 'saved' ? '' : prev));
+        }, 1500);
+        window.dispatchEvent(new CustomEvent('settings-updated'));
+      } catch (error) {
+        console.error('Failed to persist sniping settings:', error);
+        setSnipingSaveStatus('error');
+      }
+    }, 600);
+  }, [
+    config.enableSniping,
+    config.snipingMaxTokenAgeHours,
+    config.snipingMinMarketCapUsd,
+    config.snipingMaxMarketCapUsd,
+    config.snipingMinLiquidityUsd,
+    config.snipingMinVolume24hUsd,
+    config.snipingIncludeNew,
+    config.snipingIncludeBonding,
+    config.snipingIncludeGraduated,
+    config.snipingMaxCandidates,
+    config.snipingStopLossPercent,
+    config.snipingSellPercent,
+  ]);
 
   const loadFundingWallet = async () => {
     try {
@@ -228,6 +427,114 @@ export default function WalletWarming() {
     }
   };
 
+  const filteredTrendingTokens = useMemo(() => {
+    if (!Array.isArray(trendingTokens) || trendingTokens.length === 0) return [];
+
+    const now = Date.now();
+    const maxAgeHours = parseFloat(config.snipingMaxTokenAgeHours) || 0;
+    const minMarketCap = parseFloat(config.snipingMinMarketCapUsd) || 0;
+    const maxMarketCap = parseFloat(config.snipingMaxMarketCapUsd) || 0;
+    const minLiquidity = parseFloat(config.snipingMinLiquidityUsd) || 0;
+    const minVolume = parseFloat(config.snipingMinVolume24hUsd) || 0;
+    const maxCandidates = Math.max(1, parseInt(config.snipingMaxCandidates, 10) || trendingTokens.length);
+
+    const filtered = trendingTokens.filter((token) => {
+      if (!config.enableSniping) return true;
+
+      const type = token.type || '';
+      if (type === 'new' && !config.snipingIncludeNew) return false;
+      if (type === 'bonding' && !config.snipingIncludeBonding) return false;
+      if (type === 'graduated' && !config.snipingIncludeGraduated) return false;
+
+      const marketCap = Number(token.marketCapUsd || token.marketCap || 0);
+      const liquidity = Number(token.liquidity || 0);
+      const volume = Number(token.volume24h || 0);
+
+      if (marketCap < minMarketCap) return false;
+      if (maxMarketCap > 0 && marketCap > maxMarketCap) return false;
+      if (liquidity < minLiquidity) return false;
+      if (volume < minVolume) return false;
+
+      const createdAtRaw = token.createdAt || token.created_at || token.pairCreatedAt || token.launchDate;
+      if (maxAgeHours > 0 && createdAtRaw) {
+        const createdTs = new Date(createdAtRaw).getTime();
+        if (!Number.isNaN(createdTs)) {
+          const ageHours = (now - createdTs) / (1000 * 60 * 60);
+          if (ageHours > maxAgeHours) return false;
+        }
+      }
+
+      return true;
+    });
+
+    return filtered
+      .sort((a, b) => {
+        const aTs = new Date(a.createdAt || a.created_at || a.pairCreatedAt || a.launchDate || 0).getTime() || 0;
+        const bTs = new Date(b.createdAt || b.created_at || b.pairCreatedAt || b.launchDate || 0).getTime() || 0;
+        return bTs - aTs;
+      })
+      .slice(0, config.enableSniping ? maxCandidates : filtered.length);
+  }, [trendingTokens, config]);
+
+  const updateSnipingConfig = (updates, fromPreset = false) => {
+    setConfig((prev) => ({ ...prev, ...updates }));
+    if (!fromPreset && autoPresetCustomOnManualEdit) {
+      setSnipingPreset('custom');
+    }
+  };
+
+  const applySnipingPreset = (preset) => {
+    setSnipingPreset(preset);
+
+    if (preset === 'aggressive') {
+      updateSnipingConfig({
+        snipingMaxTokenAgeHours: 1,
+        snipingMinMarketCapUsd: 8000,
+        snipingMaxMarketCapUsd: 0,
+        snipingMinLiquidityUsd: 2000,
+        snipingMinVolume24hUsd: 2000,
+        snipingMaxCandidates: 100,
+        snipingStopLossPercent: 35,
+        snipingSellPercent: 85,
+        snipingIncludeNew: true,
+        snipingIncludeBonding: true,
+        snipingIncludeGraduated: true,
+      }, true);
+      return;
+    }
+
+    if (preset === 'safe') {
+      updateSnipingConfig({
+        snipingMaxTokenAgeHours: 12,
+        snipingMinMarketCapUsd: 50000,
+        snipingMaxMarketCapUsd: 0,
+        snipingMinLiquidityUsd: 20000,
+        snipingMinVolume24hUsd: 15000,
+        snipingMaxCandidates: 25,
+        snipingStopLossPercent: 15,
+        snipingSellPercent: 100,
+        snipingIncludeNew: false,
+        snipingIncludeBonding: true,
+        snipingIncludeGraduated: true,
+      }, true);
+      return;
+    }
+
+    updateSnipingConfig({
+      snipingMaxTokenAgeHours: 6,
+      snipingMinMarketCapUsd: 20000,
+      snipingMaxMarketCapUsd: 0,
+      snipingMinLiquidityUsd: 5000,
+      snipingMinVolume24hUsd: 5000,
+      snipingMaxCandidates: 50,
+      snipingStopLossPercent: 25,
+      snipingSellPercent: 100,
+      snipingIncludeNew: true,
+      snipingIncludeBonding: true,
+      snipingIncludeGraduated: true,
+    }, true);
+  };
+
   const handleCreateWallet = async () => {
     setShowCreateModal(true);
   };
@@ -341,9 +648,37 @@ export default function WalletWarming() {
       alert('Please select at least one wallet');
       return;
     }
+    if (config.enableSniping) {
+      if (!filteredTrendingTokens.length) {
+        alert('Sniping is enabled but no tokens match your filters. Relax age/market cap/liquidity thresholds.');
+        return;
+      }
+
+      if ((parseFloat(config.snipingMaxTokenAgeHours) || 0) <= 0) {
+        alert('Sniping token age (hours) must be greater than 0.');
+        return;
+      }
+
+      if ((parseFloat(config.snipingSellPercent) || 0) <= 0 || (parseFloat(config.snipingSellPercent) || 0) > 100) {
+        alert('Sniping Sell % must be between 1 and 100.');
+        return;
+      }
+
+      if ((parseFloat(config.snipingStopLossPercent) || 0) < 0 || (parseFloat(config.snipingStopLossPercent) || 0) > 95) {
+        alert('Sniping Stop Loss % must be between 0 and 95.');
+        return;
+      }
+    }
+
     setLoading(true);
     try {
-      const res = await apiService.startWarming(selectedWallets, { ...config, useJupiter: true, priorityFee: 'none', closeTokenAccounts: config.closeTokenAccounts });
+      const res = await apiService.startWarming(selectedWallets, {
+        ...config,
+        useJupiter: true,
+        priorityFee: 'none',
+        closeTokenAccounts: config.closeTokenAccounts,
+        prefetchedTrendingTokens: filteredTrendingTokens.map(token => token.mint),
+      });
       if (res.data.success) {
         await loadWallets();
         alert('Wallet warming started!');
@@ -391,17 +726,20 @@ export default function WalletWarming() {
 
   // Withdraw SOL from all selected wallets back to funding wallet
   const handleBulkWithdraw = async () => {
+    const reserveSol = withdrawKeepReserve ? 0.001 : 0.00005;
+    const minWithdrawableSol = reserveSol + 0.00001;
     if (selectedWallets.length === 0) {
       alert('Please select wallets to withdraw from');
       return;
     }
-    const walletsWithBalance = wallets.filter(w => selectedWallets.includes(w.address) && (w.solBalance || 0) > 0.001);
+    const walletsWithBalance = wallets.filter(w => selectedWallets.includes(w.address) && (w.solBalance || 0) > minWithdrawableSol);
     if (walletsWithBalance.length === 0) {
       alert('No selected wallets have withdrawable balance');
       return;
     }
     const totalSol = walletsWithBalance.reduce((sum, w) => sum + (w.solBalance || 0), 0);
-    if (!confirm(`Withdraw from ${walletsWithBalance.length} wallet(s)?\n\nApprox total: ${totalSol.toFixed(4)} SOL`)) {
+    const reserveLabel = withdrawKeepReserve ? '0.001 SOL reserve' : 'tiny fee reserve';
+    if (!confirm(`Withdraw from ${walletsWithBalance.length} wallet(s)?\n\nApprox total: ${totalSol.toFixed(4)} SOL\n(${reserveLabel} per wallet)`)) {
       return;
     }
     setFundingLoading(true);
@@ -410,7 +748,7 @@ export default function WalletWarming() {
       let failed = 0;
       for (const wallet of walletsWithBalance) {
         try {
-          const res = await apiService.withdrawSolFromWallet(wallet.address);
+          const res = await apiService.withdrawSolFromWallet(wallet.address, { reserveSol, passes: 2 });
           if (res.data.success) {
             withdrawn += res.data.amountTransferred || 0;
           } else {
@@ -584,15 +922,19 @@ export default function WalletWarming() {
   };
 
   const handleWithdrawSol = async (address) => {
+    const reserveSol = withdrawKeepReserve ? 0.001 : 0.00005;
+    const minWithdrawableSol = reserveSol + 0.00001;
     const wallet = wallets.find(w => w.address === address);
-    if (!wallet || wallet.solBalance < 0.001) {
+    if (!wallet || wallet.solBalance < minWithdrawableSol) {
       alert('Insufficient balance');
       return;
     }
-    if (!confirm(`Withdraw ~${(wallet.solBalance - 0.0001).toFixed(4)} SOL to funding wallet?`)) return;
+    const expectedAmount = Math.max(0, wallet.solBalance - minWithdrawableSol);
+    const reserveLabel = withdrawKeepReserve ? '0.001 SOL reserve' : 'tiny fee reserve';
+    if (!confirm(`Withdraw ~${expectedAmount.toFixed(4)} SOL to funding wallet?\n(${reserveLabel} kept)`)) return;
     setWithdrawingSol(prev => ({ ...prev, [address]: true }));
     try {
-      const res = await apiService.withdrawSolFromWallet(address);
+      const res = await apiService.withdrawSolFromWallet(address, { reserveSol, passes: 2 });
       if (res.data.success) {
         alert(`Withdrawn: ${res.data.amountTransferred?.toFixed(4) || 0} SOL`);
         await loadWallets();
@@ -799,6 +1141,18 @@ export default function WalletWarming() {
             >
               📤 Withdraw
             </button>
+            <label
+              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-700 bg-gray-900/60 text-xs text-gray-300"
+              title="Toggle between near-full drain (tiny reserve) and keep-reserve mode (0.001 SOL left per wallet)."
+            >
+              <input
+                type="checkbox"
+                checked={withdrawKeepReserve}
+                onChange={(e) => setWithdrawKeepReserve(e.target.checked)}
+                className="w-4 h-4 accent-cyan-500"
+              />
+              Keep 0.001 SOL
+            </label>
             <button
               onClick={() => setShowPrivateFunding(true)}
               className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors text-sm"
@@ -1029,7 +1383,184 @@ export default function WalletWarming() {
                 <span className="text-sm text-gray-300">Close Accounts</span>
               </label>
             </div>
+            <div className="flex items-center">
+              <label className="flex items-center gap-2 cursor-pointer" title="Enable advanced token sniping filters for newly created/qualified tokens.">
+                <input
+                  type="checkbox"
+                  checked={config.enableSniping}
+                  onChange={(e) => setConfig({ ...config, enableSniping: e.target.checked })}
+                  className="w-4 h-4 accent-cyan-500"
+                />
+                <span className="text-sm text-cyan-300 font-medium">Toggle Sniping</span>
+              </label>
+            </div>
           </div>
+
+          {config.enableSniping && (
+            <div className="mt-4 pt-4 border-t border-cyan-900/50">
+              <div className="text-sm font-semibold text-cyan-300 mb-3">🎯 Advanced Sniping Bot Settings</div>
+              <div className="mb-3">
+                <div className="text-gray-300 font-medium mb-2 text-xs">Quick Strategy Presets</div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => applySnipingPreset('safe')}
+                    className={`px-3 py-1.5 rounded border text-xs ${snipingPreset === 'safe' ? 'bg-cyan-600 border-cyan-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-300'}`}
+                  >
+                    Safe
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applySnipingPreset('balanced')}
+                    className={`px-3 py-1.5 rounded border text-xs ${snipingPreset === 'balanced' ? 'bg-cyan-600 border-cyan-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-300'}`}
+                  >
+                    Balanced
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applySnipingPreset('aggressive')}
+                    className={`px-3 py-1.5 rounded border text-xs ${snipingPreset === 'aggressive' ? 'bg-cyan-600 border-cyan-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-300'}`}
+                  >
+                    Aggressive
+                  </button>
+                  <span className={`px-3 py-1.5 rounded border text-xs ${snipingPreset === 'custom' ? 'bg-cyan-600 border-cyan-500 text-white' : 'bg-gray-900 border-gray-700 text-gray-500'}`}>
+                    Custom
+                  </span>
+                </div>
+                <div className="mt-2">
+                  <label
+                    className="inline-flex items-center gap-2 cursor-pointer"
+                    title="ON: whenever you manually change any sniping field, preset switches to Custom so the UI reflects your exact custom strategy. OFF: selected preset label stays fixed even after manual edits. This is important to avoid confusion between preset defaults and your live custom values."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={autoPresetCustomOnManualEdit}
+                      onChange={(e) => setAutoPresetCustomOnManualEdit(e.target.checked)}
+                      className="w-4 h-4 accent-cyan-500"
+                    />
+                    <span className="text-xs text-gray-300">Auto-switch preset to Custom on manual edit</span>
+                  </label>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Max Token Age (hours)</label>
+                  <input
+                    type="number"
+                    min="0.1"
+                    step="0.1"
+                    value={config.snipingMaxTokenAgeHours}
+                    onChange={(e) => updateSnipingConfig({ snipingMaxTokenAgeHours: parseFloat(e.target.value) || 1 })}
+                    className="w-full px-3 py-2 bg-gray-800 border border-cyan-900/60 rounded text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Min Market Cap ($)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1000"
+                    value={config.snipingMinMarketCapUsd}
+                    onChange={(e) => updateSnipingConfig({ snipingMinMarketCapUsd: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 bg-gray-800 border border-cyan-900/60 rounded text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Max Market Cap ($)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1000"
+                    value={config.snipingMaxMarketCapUsd}
+                    onChange={(e) => updateSnipingConfig({ snipingMaxMarketCapUsd: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 bg-gray-800 border border-cyan-900/60 rounded text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Min Liquidity ($)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="500"
+                    value={config.snipingMinLiquidityUsd}
+                    onChange={(e) => updateSnipingConfig({ snipingMinLiquidityUsd: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 bg-gray-800 border border-cyan-900/60 rounded text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Min 24h Volume ($)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="500"
+                    value={config.snipingMinVolume24hUsd}
+                    onChange={(e) => updateSnipingConfig({ snipingMinVolume24hUsd: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 bg-gray-800 border border-cyan-900/60 rounded text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Max Candidates</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="200"
+                    step="1"
+                    value={config.snipingMaxCandidates}
+                    onChange={(e) => updateSnipingConfig({ snipingMaxCandidates: parseInt(e.target.value, 10) || 50 })}
+                    className="w-full px-3 py-2 bg-gray-800 border border-cyan-900/60 rounded text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Stop Loss (%)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="95"
+                    step="1"
+                    value={config.snipingStopLossPercent}
+                    onChange={(e) => updateSnipingConfig({ snipingStopLossPercent: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 bg-gray-800 border border-cyan-900/60 rounded text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Sell (%)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    step="0.1"
+                    value={config.snipingSellPercent}
+                    onChange={(e) => updateSnipingConfig({ snipingSellPercent: parseFloat(e.target.value) || 100 })}
+                    className="w-full px-3 py-2 bg-gray-800 border border-cyan-900/60 rounded text-white text-sm"
+                  />
+                </div>
+                <div className="flex items-center">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={config.snipingIncludeNew} onChange={(e) => updateSnipingConfig({ snipingIncludeNew: e.target.checked })} className="w-4 h-4 accent-cyan-500" />
+                    <span className="text-sm text-gray-300">Include NEW</span>
+                  </label>
+                </div>
+                <div className="flex items-center">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={config.snipingIncludeBonding} onChange={(e) => updateSnipingConfig({ snipingIncludeBonding: e.target.checked })} className="w-4 h-4 accent-cyan-500" />
+                    <span className="text-sm text-gray-300">Include BONDING</span>
+                  </label>
+                </div>
+                <div className="flex items-center">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={config.snipingIncludeGraduated} onChange={(e) => updateSnipingConfig({ snipingIncludeGraduated: e.target.checked })} className="w-4 h-4 accent-cyan-500" />
+                    <span className="text-sm text-gray-300">Include GRADUATED</span>
+                  </label>
+                </div>
+              </div>
+              <div className="mt-2 text-xs text-cyan-300">Selection order is forced to newest → oldest based on token creation time.</div>
+              <div className="mt-1 text-xs">
+                {snipingSaveStatus === 'saving' && <span className="text-amber-300">Saving sniping settings...</span>}
+                {snipingSaveStatus === 'saved' && <span className="text-emerald-300">Sniping settings saved</span>}
+                {snipingSaveStatus === 'error' && <span className="text-red-300">Failed to save sniping settings</span>}
+              </div>
+            </div>
+          )}
           
           {/* Mode explanation */}
           <div className="mt-3 pt-3 border-t border-gray-800">
@@ -1049,7 +1580,7 @@ export default function WalletWarming() {
                 onClick={() => setShowTrendingTokens(!showTrendingTokens)}
                 className="text-sm text-gray-400 hover:text-white flex items-center gap-2"
               >
-                {showTrendingTokens ? '▼' : '▶'} Trending Tokens ({trendingTokens.length})
+                {showTrendingTokens ? '▼' : '▶'} Trending Tokens ({config.enableSniping ? filteredTrendingTokens.length : trendingTokens.length})
               </button>
               <button
                 onClick={() => loadTrendingTokens(true)}
@@ -1059,12 +1590,18 @@ export default function WalletWarming() {
                 {trendingStatus.loading ? 'Loading...' : 'Refresh'}
               </button>
             </div>
-            {showTrendingTokens && trendingTokens.length > 0 && (
+            {showTrendingTokens && (config.enableSniping ? filteredTrendingTokens.length > 0 : trendingTokens.length > 0) && (
               <div className="grid grid-cols-4 md:grid-cols-8 gap-2 max-h-32 overflow-y-auto">
-                {trendingTokens.slice(0, 24).map((token, idx) => (
+                {(config.enableSniping ? filteredTrendingTokens : trendingTokens).slice(0, 24).map((token, idx) => (
                   <div key={idx} className="bg-gray-800/50 rounded p-2 text-xs">
                     <div className="font-medium text-white truncate">{token.symbol}</div>
                     <div className="text-gray-500 text-[10px]">{token.type}</div>
+                    {config.enableSniping && (
+                      <>
+                        <div className="text-cyan-400 text-[10px]">MC: ${Number(token.marketCapUsd || token.marketCap || 0).toLocaleString()}</div>
+                        <div className="text-gray-500 text-[10px]">{token.createdAt ? new Date(token.createdAt).toLocaleString() : 'n/a'}</div>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1314,9 +1851,9 @@ export default function WalletWarming() {
                       </button>
                       <button
                         onClick={() => handleWithdrawSol(wallet.address)}
-                        disabled={withdrawingSol[wallet.address] || (wallet.solBalance || 0) < 0.001}
+                        disabled={withdrawingSol[wallet.address] || (wallet.solBalance || 0) < ((withdrawKeepReserve ? 0.001 : 0.00005) + 0.00001)}
                         className="px-2 py-1 bg-cyan-600/80 hover:bg-cyan-600 text-white rounded text-xs disabled:opacity-50"
-                        title="Withdraw SOL"
+                        title={withdrawKeepReserve ? 'Withdraw SOL (keep 0.001 SOL reserve)' : 'Withdraw SOL (near-full drain)'}
                       >
                         {withdrawingSol[wallet.address] ? '...' : '💰'}
                       </button>

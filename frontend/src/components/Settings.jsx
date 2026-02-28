@@ -44,6 +44,9 @@ export default function Settings() {
     try {
       const res = await apiService.getSettings();
       const loadedSettings = res.data.settings || {};
+      if (loadedSettings.LAUNCH_OWN_TOKEN === undefined) {
+        loadedSettings.LAUNCH_OWN_TOKEN = 'true';
+      }
       setSettings(loadedSettings);
       setPrivateKeyChanges({});
     } catch (error) {
@@ -326,6 +329,12 @@ export default function Settings() {
       icon: Cog6ToothIcon,
       description: 'Advanced options and features.',
       settings: [
+        {
+          key: 'LAUNCH_OWN_TOKEN',
+          label: 'Launching Own Token',
+          type: 'checkbox',
+          description: 'Enabled: show Launch Token page. Disabled: show Pump Existing Token page with pumping configuration and Launch button.'
+        },
         { key: 'VANITY_MODE', label: 'Vanity Mode', type: 'checkbox', description: 'Use vanity addresses ending with "pump"' },
         { key: 'SIMULATE_ONLY', label: 'Simulation Mode', type: 'checkbox', description: 'Test without sending transactions (dry run)' },
         { 
@@ -362,6 +371,72 @@ export default function Settings() {
           type: 'number', 
           description: 'Default number of intermediary wallets (0-5). Set to 0 for direct sends. Ignored if Direct Send Mode is enabled.',
           inputProps: { min: '0', max: '5', step: '1' }
+        },
+        {
+          key: 'WARM_SNIPING_ENABLED',
+          label: 'Wallet Warming Sniping Enabled',
+          type: 'checkbox',
+          description: 'Enable advanced sniping filters in Wallet Warming by default.'
+        },
+        {
+          key: 'WARM_SNIPING_MAX_TOKEN_AGE_HOURS',
+          label: 'Sniping Max Token Age (hours)',
+          type: 'number',
+          description: 'Only include tokens newer than this age in hours. Used by Wallet Warming sniping mode.',
+          inputProps: { min: '0.1', step: '0.1' }
+        },
+        {
+          key: 'WARM_SNIPING_MIN_MARKET_CAP_USD',
+          label: 'Sniping Min Market Cap (USD)',
+          type: 'number',
+          description: 'Minimum market cap threshold for sniping candidates.',
+          inputProps: { min: '0', step: '1000' }
+        },
+        {
+          key: 'WARM_SNIPING_MAX_MARKET_CAP_USD',
+          label: 'Sniping Max Market Cap (USD)',
+          type: 'number',
+          description: 'Maximum market cap threshold (0 = no upper cap).',
+          inputProps: { min: '0', step: '1000' }
+        },
+        {
+          key: 'WARM_SNIPING_MIN_LIQUIDITY_USD',
+          label: 'Sniping Min Liquidity (USD)',
+          type: 'number',
+          description: 'Minimum liquidity required for sniping candidates.',
+          inputProps: { min: '0', step: '500' }
+        },
+        {
+          key: 'WARM_SNIPING_MIN_VOLUME_24H_USD',
+          label: 'Sniping Min 24h Volume (USD)',
+          type: 'number',
+          description: 'Minimum 24h volume required for sniping candidates.',
+          inputProps: { min: '0', step: '500' }
+        },
+        {
+          key: 'WARM_SNIPING_INCLUDE_NEW',
+          label: 'Sniping Include NEW Tokens',
+          type: 'checkbox',
+          description: 'Include NEW token type in sniping candidate pool.'
+        },
+        {
+          key: 'WARM_SNIPING_INCLUDE_BONDING',
+          label: 'Sniping Include BONDING Tokens',
+          type: 'checkbox',
+          description: 'Include BONDING token type in sniping candidate pool.'
+        },
+        {
+          key: 'WARM_SNIPING_INCLUDE_GRADUATED',
+          label: 'Sniping Include GRADUATED Tokens',
+          type: 'checkbox',
+          description: 'Include GRADUATED token type in sniping candidate pool.'
+        },
+        {
+          key: 'WARM_SNIPING_MAX_CANDIDATES',
+          label: 'Sniping Max Candidates',
+          type: 'number',
+          description: 'Maximum number of newest-to-oldest candidates considered by sniping mode.',
+          inputProps: { min: '1', max: '200', step: '1' }
         },
       ],
     },

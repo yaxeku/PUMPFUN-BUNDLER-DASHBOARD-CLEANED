@@ -41,6 +41,8 @@ export default function HolderWallets() {
   const [menuRunning, setMenuRunning] = useState({});
   const [terminalMessages, setTerminalMessages] = useState([]); // Terminal log messages
   const terminalRef = useRef(null);
+  const hasLoggedWalletLoadRef = useRef(false);
+  const lastRunSummaryRef = useRef('');
   const [liveTrades, setLiveTrades] = useState([]);
   const [liveTradesError, setLiveTradesError] = useState('');
   const [hideMyWallets, setHideMyWallets] = useState(false);
@@ -510,18 +512,18 @@ export default function HolderWallets() {
       
       if (currentRun && currentRun.mintAddress) {
         const mintAddr = currentRun.mintAddress || '';
-        const statusMsg = `Run: ${mintAddr.substring ? mintAddr.substring(0, 8) : mintAddr.slice(0, 8)}... | Status: ${currentRun.launchStatus || 'N/A'} | Wallets: ${currentRun.walletKeys?.length || currentRun.count || 0} | Bundle: ${currentRun.bundleWalletKeys?.length || 0} | Holder: ${currentRun.holderWalletKeys?.length || 0}`;
-        
-        // Only add if it's new info AND status changed (avoid spam)
-        setTerminalMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
-          // Check if message is identical OR if status hasn't changed (avoid duplicate status updates)
-          if (lastMsg && (lastMsg.message === statusMsg || 
-              (lastMsg.message.includes('Status:') && lastMsg.message.includes(currentRun.launchStatus || 'N/A')))) {
-            return prev; // Don't add duplicate or same-status update
-          }
-          return [...prev.slice(-49), { message: statusMsg, type: 'info', timestamp: new Date().toLocaleTimeString() }];
-        });
+        const walletCount = currentRun.walletKeys?.length || currentRun.count || 0;
+        const bundleCount = currentRun.bundleWalletKeys?.length || 0;
+        const holderCount = currentRun.holderWalletKeys?.length || 0;
+        const runFingerprint = `${mintAddr}|${currentRun.launchStatus || 'N/A'}|${walletCount}|${bundleCount}|${holderCount}`;
+
+        if (lastRunSummaryRef.current !== runFingerprint) {
+          lastRunSummaryRef.current = runFingerprint;
+          const statusMsg = `Run: ${mintAddr.substring ? mintAddr.substring(0, 8) : mintAddr.slice(0, 8)}... | Status: ${currentRun.launchStatus || 'N/A'} | Wallets: ${walletCount} | Bundle: ${bundleCount} | Holder: ${holderCount}`;
+          setTerminalMessages(prev => [...prev.slice(-49), { message: statusMsg, type: 'info', timestamp: new Date().toLocaleTimeString() }]);
+        }
+      } else {
+        lastRunSummaryRef.current = '';
       }
     } catch (error) {
       // Silently fail - not critical
@@ -542,17 +544,20 @@ export default function HolderWallets() {
   const loadWallets = async () => {
     try {
       const res = await apiService.getHolderWallets();
-      const hadWallets = wallets.length > 0;
-      const hasWalletsNow = res.data.wallets && res.data.wallets.length > 0;
+      const nextWallets = res.data.wallets || [];
+      const hasWalletsNow = nextWallets.length > 0;
       
-      setWallets(res.data.wallets || []);
+      setWallets(nextWallets);
       setMintAddress(res.data.mintAddress);
       
       // Only show message when wallets are FIRST loaded (not on every refresh)
       // DON'T reset priority fee - let user keep their selection
-      if (!hadWallets && hasWalletsNow) {
+      if (hasWalletsNow && !hasLoggedWalletLoadRef.current) {
+        hasLoggedWalletLoadRef.current = true;
         addTerminalMessage('Wallets loaded!', 'success');
         // REMOVED: setPriorityFee('low') - don't reset user's choice
+      } else if (!hasWalletsNow) {
+        hasLoggedWalletLoadRef.current = false;
       }
     } catch (error) {
       console.error('Failed to load wallets:', error);
@@ -1446,6 +1451,12 @@ export default function HolderWallets() {
                       setMintAddress(addr);
                       setLiveTrades([]); // Clear old trades
                       try {
+                        await apiService.setActiveToken(addr, 'auto');
+                        window.dispatchEvent(new Event('active-token-updated'));
+                      } catch {
+                        // Keep terminal token loading usable even if persistence fails
+                      }
+                      try {
                         await apiService.startTracking(addr);
                         addTerminalMessage(`[ok] Now tracking ${addr.slice(0, 8)}...`, 'success');
                       } catch (err) {
@@ -1466,6 +1477,12 @@ export default function HolderWallets() {
                       setMintAddress(addr);
                       setLiveTrades([]);
                       try {
+                        await apiService.setActiveToken(addr, 'auto');
+                        window.dispatchEvent(new Event('active-token-updated'));
+                      } catch {
+                        // Keep terminal token loading usable even if persistence fails
+                      }
+                      try {
                         await apiService.startTracking(addr);
                         addTerminalMessage(`[ok] Now tracking ${addr.slice(0, 8)}...`, 'success');
                       } catch (err) {
@@ -1481,10 +1498,17 @@ export default function HolderWallets() {
           </div>
           {mintAddress && (
             <button
-              onClick={() => {
+              onClick={async () => {
+                try {
+                  await apiService.clearActiveToken();
+                } catch (error) {
+                  // Continue local clear even if API clear fails
+                }
                 setMintAddress(null);
                 setLiveTrades([]);
                 addTerminalMessage(' Token cleared', 'info');
+                window.dispatchEvent(new Event('active-token-cleared'));
+                loadCurrentRunInfo();
               }}
               className="p-0.5 hover:bg-red-500/20 rounded transition-all"
               title="Clear token"

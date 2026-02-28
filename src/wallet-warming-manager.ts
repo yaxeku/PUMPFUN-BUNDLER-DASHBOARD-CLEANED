@@ -8,7 +8,7 @@ import path from "path"
 import { buyTokenSimple, sellTokenSimple, getWalletTokenBalance } from "../cli/trading-terminal"
 import { RPC_ENDPOINT, RPC_WEBSOCKET_ENDPOINT, PRIVATE_KEY } from "../constants"
 import { sleep } from "../utils"
-import { getCachedTrendingTokens } from "./fetch-trending-tokens"
+import { fetchTrendingPumpFunTokens, getCachedTrendingTokens } from "./fetch-trending-tokens"
 import { TOKEN_PROGRAM_ID, createCloseAccountInstruction, getAssociatedTokenAddress, getAccount } from "@solana/spl-token"
 
 const connection = new Connection(RPC_ENDPOINT, {
@@ -43,21 +43,135 @@ const getProjectRoot = () => {
 }
 
 const WARMED_WALLETS_FILE = path.join(getProjectRoot(), 'keys', 'warmed-wallets.json')
+const CURRENT_RUN_FILE = path.join(getProjectRoot(), 'keys', 'current-run.json')
+const DEFAULT_GATHER_RESERVE_SOL = 0.00005
+const GATHER_FEE_BUFFER_SOL = 0.00001
+
+function recoverWarmedWalletsFromCurrentRun(): WarmedWallet[] {
+  try {
+    if (!fs.existsSync(CURRENT_RUN_FILE)) {
+      return []
+    }
+
+    const currentRunContent = fs.readFileSync(CURRENT_RUN_FILE, 'utf8').trim()
+    if (!currentRunContent) {
+      return []
+    }
+
+    const currentRun = JSON.parse(currentRunContent)
+    const bundleWalletKeys = Array.isArray(currentRun?.bundleWalletKeys) ? currentRun.bundleWalletKeys : []
+    const holderWalletKeys = Array.isArray(currentRun?.holderWalletKeys) ? currentRun.holderWalletKeys : []
+    const walletKeys = Array.isArray(currentRun?.walletKeys) ? currentRun.walletKeys : []
+
+    const combinedWalletKeys = [...bundleWalletKeys, ...holderWalletKeys, ...walletKeys]
+    const uniqueWalletKeys = [...new Set(combinedWalletKeys.filter((walletKey) => typeof walletKey === 'string' && walletKey.trim().length > 0))]
+
+    if (uniqueWalletKeys.length === 0) {
+      return []
+    }
+
+    const bundleKeySet = new Set(bundleWalletKeys)
+    const holderKeySet = new Set(holderWalletKeys)
+    const recoveredAt = new Date().toISOString()
+    const recoveredWallets: WarmedWallet[] = []
+
+    for (const privateKey of uniqueWalletKeys) {
+      try {
+        const keypair = Keypair.fromSecretKey(base58.decode(privateKey))
+        const tags: string[] = []
+
+        if (bundleKeySet.has(privateKey)) {
+          tags.push('bundle')
+        }
+        if (holderKeySet.has(privateKey)) {
+          tags.push('holder')
+        }
+        if (tags.length === 0) {
+          tags.push('recovered')
+        }
+
+        recoveredWallets.push({
+          privateKey,
+          address: keypair.publicKey.toBase58(),
+          transactionCount: 0,
+          firstTransactionDate: null,
+          lastTransactionDate: null,
+          totalTrades: 0,
+          tradesLast7Days: 0,
+          createdAt: recoveredAt,
+          status: 'idle',
+          tags
+        })
+      } catch {
+        // Skip invalid keys while recovering
+      }
+    }
+
+    return recoveredWallets
+  } catch {
+    return []
+  }
+}
 
 // Load warmed wallets
 // Only logs errors to reduce noise (this function is called frequently)
 export function loadWarmedWallets(): WarmedWallet[] {
   try {
-    if (fs.existsSync(WARMED_WALLETS_FILE)) {
-      const content = fs.readFileSync(WARMED_WALLETS_FILE, 'utf8')
-      const data = JSON.parse(content)
-      const wallets = data.wallets || []
-      // Only log if there's an issue or first load (check if file was just created)
-      return wallets
+    if (!fs.existsSync(WARMED_WALLETS_FILE)) {
+      const recoveredWallets = recoverWarmedWalletsFromCurrentRun()
+      if (recoveredWallets.length > 0) {
+        saveWarmedWallets(recoveredWallets)
+        console.log(`[Wallet Manager] Recovered ${recoveredWallets.length} warmed wallet(s) from current-run.json`)
+        return recoveredWallets
+      }
+      return []
     }
+
+    const content = fs.readFileSync(WARMED_WALLETS_FILE, 'utf8').trim()
+    if (!content) {
+      const recoveredWallets = recoverWarmedWalletsFromCurrentRun()
+      if (recoveredWallets.length > 0) {
+        saveWarmedWallets(recoveredWallets)
+        console.log(`[Wallet Manager] Recovered ${recoveredWallets.length} warmed wallet(s) from empty warmed-wallets.json`)
+        return recoveredWallets
+      }
+      saveWarmedWallets([])
+      return []
+    }
+
+    const data = JSON.parse(content)
+    const wallets = Array.isArray(data?.wallets) ? data.wallets : []
+    if (wallets.length === 0) {
+      const recoveredWallets = recoverWarmedWalletsFromCurrentRun()
+      if (recoveredWallets.length > 0) {
+        saveWarmedWallets(recoveredWallets)
+        console.log(`[Wallet Manager] Recovered ${recoveredWallets.length} warmed wallet(s) from current-run fallback`)
+        return recoveredWallets
+      }
+    }
+    return wallets
   } catch (error) {
     console.error('[Wallet Manager] Error loading warmed wallets:', error)
     console.error('[Wallet Manager] Error stack:', error instanceof Error ? error.stack : 'No stack')
+
+    try {
+      if (fs.existsSync(WARMED_WALLETS_FILE)) {
+        const backupFile = `${WARMED_WALLETS_FILE}.corrupt-${Date.now()}`
+        fs.renameSync(WARMED_WALLETS_FILE, backupFile)
+        console.warn(`[Wallet Manager] Backed up corrupt warmed wallets file to: ${backupFile}`)
+      }
+
+      const recoveredWallets = recoverWarmedWalletsFromCurrentRun()
+      if (recoveredWallets.length > 0) {
+        saveWarmedWallets(recoveredWallets)
+        console.log(`[Wallet Manager] Recovered ${recoveredWallets.length} warmed wallet(s) after file repair`)
+        return recoveredWallets
+      }
+
+      saveWarmedWallets([])
+    } catch (repairError) {
+      console.error('[Wallet Manager] Failed to repair warmed wallets file:', repairError)
+    }
   }
   return []
 }
@@ -69,7 +183,10 @@ export function saveWarmedWallets(wallets: WarmedWallet[]): void {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true })
     }
-    fs.writeFileSync(WARMED_WALLETS_FILE, JSON.stringify({ wallets }, null, 2))
+
+    const tempFile = `${WARMED_WALLETS_FILE}.tmp`
+    fs.writeFileSync(tempFile, JSON.stringify({ wallets }, null, 2), 'utf8')
+    fs.renameSync(tempFile, WARMED_WALLETS_FILE)
   } catch (error) {
     console.error('Error saving warmed wallets:', error)
     throw error
@@ -310,6 +427,9 @@ export async function warmWallet(
     useJupiter: boolean
     closeTokenAccounts?: boolean // If true, sell 100% and close accounts to recover rent. If false, sell 99.9% and keep dust (cheaper for many trades)
     tradingPattern?: 'sequential' | 'randomized' | 'accumulate' // Trading pattern strategy
+    enableSniping?: boolean
+    snipingStopLossPercent?: number
+    snipingSellPercent?: number
   },
   tokenList: string[],
   onProgress?: (wallet: WarmedWallet) => void
@@ -344,7 +464,13 @@ export async function warmWallet(
   
   // Generate pattern based on trading pattern type
   const pattern = config.tradingPattern || 'sequential'
+  const snipingEnabled = config.enableSniping === true
+  const snipingSellPercent = Math.max(1, Math.min(100, Number(config.snipingSellPercent ?? 100)))
+  const snipingStopLossPercent = Math.max(0, Math.min(95, Number(config.snipingStopLossPercent ?? 0)))
   console.log(`   🎲 Trading pattern: ${pattern} (from config: ${config.tradingPattern || 'undefined'})`)
+  if (snipingEnabled) {
+    console.log(`   🎯 Sniping controls: sell ${snipingSellPercent.toFixed(1)}%, stop-loss ${snipingStopLossPercent.toFixed(1)}%`)
+  }
   
   // For randomized: create a pattern like [buy, buy, sell, buy, sell, sell] based on tradesPerWallet
   let tradePlan: Array<'buy' | 'sell'> = []
@@ -516,12 +642,16 @@ export async function warmWallet(
           console.log(`   ✅ Sequential pattern detected - selling immediately after buy`)
           // Choose sell strategy based on config
           const closeAccounts = config.closeTokenAccounts !== false; // Default to true (close accounts)
+          const requestedSellPercent = snipingEnabled
+            ? snipingSellPercent
+            : (closeAccounts ? 100 : 99.9)
+          const shouldAttemptClose = closeAccounts && requestedSellPercent >= 99.95
       
           // Track balance before sell to measure costs
           const balanceBeforeSell = await connection.getBalance(walletKp.publicKey)
           const balanceBeforeSellSol = balanceBeforeSell / 1e9
           
-          if (closeAccounts) {
+          if (shouldAttemptClose) {
         // Mode 1: Sell 100% and close account to recover rent (~0.002 SOL per trade)
         // More expensive per trade (extra close tx) but recovers rent - good for cleanup
         console.log(`   💸 Selling 100% and closing account (recovering rent)...`)
@@ -810,13 +940,13 @@ export async function warmWallet(
           // Don't throw - continue with next trade even if close fails
         }
       } else {
-        // Mode 2: Sell 99.9% and keep dust (don't close account)
-        // Cheaper per trade (no close tx) but rent stays locked - good for building many tx history
-        console.log(`   💸 Selling 99.9% (keeping 0.1% dust, no close - cheap mode)...`)
+        // Mode 2: Partial sell (no account close)
+        // Cheaper and supports configurable sniping sell percentage
+        console.log(`   💸 Selling ${requestedSellPercent.toFixed(1)}% (partial sell mode, no account close)...`)
         await sellTokenSimple(
           wallet.privateKey,
           randomToken,
-          99.9, // Sell 99.9%, keep tiny dust so account stays open
+          requestedSellPercent,
           config.priorityFee,
           true // skipHeliusSender = true (save 0.0002 SOL per tx for wallet warming)
         )
@@ -861,13 +991,13 @@ export async function warmWallet(
         tokenToSell = heldTokens[Math.floor(Math.random() * heldTokens.length)]
       }
       
-      const sellPercentage = pattern === 'accumulate' && i === tradePlan.length - 1 ? 100 : (80 + Math.random() * 20)
+      const closeAccounts = config.closeTokenAccounts !== false
+      const defaultSellPercentage = pattern === 'accumulate' && i === tradePlan.length - 1 ? 100 : (80 + Math.random() * 20)
+      const configuredSnipingSell = snipingEnabled ? snipingSellPercent : defaultSellPercentage
+      const sellPercentage = closeAccounts && configuredSnipingSell >= 99.95 ? 100 : configuredSnipingSell
       
       try {
         console.log(`   [${i + 1}/${tradePlan.length}] 💸 Selling ${sellPercentage.toFixed(1)}% of ${tokenToSell.mint.substring(0, 8)}...`)
-        
-        // Choose sell strategy based on config
-        const closeAccounts = config.closeTokenAccounts !== false; // Default to true (close accounts)
         
         // Track balance before sell to measure costs
         const balanceBeforeSell = await connection.getBalance(walletKp.publicKey)
@@ -973,8 +1103,31 @@ export async function warmWallet(
           await sleep(interval * 1000)
         }
       } catch (error: any) {
-        failedCount++
-        console.log(`   ❌ Sell action ${i + 1} failed: ${error.message}`)
+        let recoveredByStopLoss = false
+        if (snipingEnabled && snipingStopLossPercent > 0) {
+          try {
+            console.log(`   🛑 Stop-loss fallback triggered. Retrying emergency full sell for ${tokenToSell.mint.substring(0, 8)}...`)
+            await sellTokenSimple(
+              wallet.privateKey,
+              tokenToSell.mint,
+              100,
+              'high',
+              true
+            )
+            const index = heldTokens.findIndex(t => t.mint === tokenToSell.mint)
+            if (index >= 0) heldTokens.splice(index, 1)
+            successCount++
+            recoveredByStopLoss = true
+            console.log(`   ✅ Stop-loss emergency sell completed`)
+          } catch (stopLossError: any) {
+            console.log(`   ❌ Stop-loss emergency sell failed: ${stopLossError.message}`)
+          }
+        }
+
+        if (!recoveredByStopLoss) {
+          failedCount++
+          console.log(`   ❌ Sell action ${i + 1} failed: ${error.message}`)
+        }
         if (i < tradePlan.length - 1) await sleep(10000) // Wait on error
       }
     } else if (action === 'sell' && heldTokens.length === 0) {
@@ -1019,7 +1172,11 @@ export async function warmWallet(
     console.log(`   💸 Final sell: Selling remaining ${heldTokens.length} token(s)...`)
     for (const token of heldTokens) {
       try {
-        await sellTokenSimple(wallet.privateKey, token.mint, 100, config.priorityFee, true)
+        const closeAccounts = config.closeTokenAccounts !== false
+        const finalSellPercentage = snipingEnabled
+          ? (closeAccounts && snipingSellPercent >= 99.95 ? 100 : snipingSellPercent)
+          : 100
+        await sellTokenSimple(wallet.privateKey, token.mint, finalSellPercentage, config.priorityFee, true)
         console.log(`   ✅ Sold ${token.mint.substring(0, 8)}...`)
         successCount++
       } catch (error: any) {
@@ -1083,6 +1240,19 @@ export async function warmWallets(
     closeTokenAccounts?: boolean
     fundingAmount?: number
     skipFunding?: boolean
+    enableSniping?: boolean
+    snipingMaxTokenAgeHours?: number
+    snipingMinMarketCapUsd?: number
+    snipingMaxMarketCapUsd?: number
+    snipingMinLiquidityUsd?: number
+    snipingMinVolume24hUsd?: number
+    snipingIncludeNew?: boolean
+    snipingIncludeBonding?: boolean
+    snipingIncludeGraduated?: boolean
+    snipingMaxCandidates?: number
+    snipingStopLossPercent?: number
+    snipingSellPercent?: number
+    prefetchedTrendingTokens?: string[]
   },
   onProgress?: (wallet: WarmedWallet) => void
 ): Promise<void> {
@@ -1105,9 +1275,66 @@ export async function warmWallets(
   let tokenList: string[] = []
   if (config.useTrendingTokens) {
     const minTokensNeeded = Math.max(100, walletsToWarm.length * 10)
-    const tokens = await getCachedTrendingTokens(minTokensNeeded)
-    tokenList = tokens.map(t => t.mint)
-    console.log(`✅ Fetched ${tokenList.length} tokens from Moralis`)
+
+    if (Array.isArray(config.prefetchedTrendingTokens) && config.prefetchedTrendingTokens.length > 0) {
+      tokenList = Array.from(new Set(config.prefetchedTrendingTokens.filter((mint) => typeof mint === 'string' && mint.length > 20)))
+      console.log(`✅ Using ${tokenList.length} prefetched trending token(s) from frontend filters`)
+    }
+
+    if (tokenList.length === 0 && config.enableSniping) {
+      const rawTokens = await fetchTrendingPumpFunTokens(Math.max(200, minTokensNeeded), { shuffle: false })
+      const now = Date.now()
+      const maxAgeHours = Number(config.snipingMaxTokenAgeHours || 24)
+      const minMarketCap = Number(config.snipingMinMarketCapUsd || 0)
+      const maxMarketCap = Number(config.snipingMaxMarketCapUsd || 0)
+      const minLiquidity = Number(config.snipingMinLiquidityUsd || 0)
+      const minVolume24h = Number(config.snipingMinVolume24hUsd || 0)
+      const includeNew = config.snipingIncludeNew !== false
+      const includeBonding = config.snipingIncludeBonding !== false
+      const includeGraduated = config.snipingIncludeGraduated !== false
+      const maxCandidates = Math.max(1, Number(config.snipingMaxCandidates || minTokensNeeded))
+
+      const filteredTokens = rawTokens
+        .filter((token) => {
+          if (!token?.mint) return false
+
+          if (token.type === 'new' && !includeNew) return false
+          if (token.type === 'bonding' && !includeBonding) return false
+          if (token.type === 'graduated' && !includeGraduated) return false
+
+          const tokenMarketCap = Number(token.marketCapUsd || 0)
+          const tokenLiquidity = Number(token.liquidity || 0)
+          const tokenVolume = Number(token.volume24h || 0)
+
+          if (tokenMarketCap < minMarketCap) return false
+          if (maxMarketCap > 0 && tokenMarketCap > maxMarketCap) return false
+          if (tokenLiquidity < minLiquidity) return false
+          if (tokenVolume < minVolume24h) return false
+
+          if (token.createdAt && maxAgeHours > 0) {
+            const createdAtMs = new Date(token.createdAt).getTime()
+            if (!Number.isNaN(createdAtMs)) {
+              const tokenAgeHours = (now - createdAtMs) / (1000 * 60 * 60)
+              if (tokenAgeHours > maxAgeHours) return false
+            }
+          }
+
+          return true
+        })
+        .sort((a, b) => {
+          const aTs = a.createdAt ? new Date(a.createdAt).getTime() : 0
+          const bTs = b.createdAt ? new Date(b.createdAt).getTime() : 0
+          return bTs - aTs
+        })
+        .slice(0, maxCandidates)
+
+      tokenList = filteredTokens.map((token) => token.mint)
+      console.log(`✅ Sniping filter selected ${tokenList.length} token(s) (newest→oldest)`)
+    } else if (tokenList.length === 0) {
+      const tokens = await getCachedTrendingTokens(minTokensNeeded)
+      tokenList = tokens.map(t => t.mint)
+      console.log(`✅ Fetched ${tokenList.length} tokens from Moralis`)
+    }
   }
   
   if (tokenList.length === 0) {
@@ -1196,7 +1423,10 @@ export async function warmWallets(
         priorityFee: config.priorityFee,
         useJupiter: config.useJupiter,
         closeTokenAccounts: config.closeTokenAccounts,
-        tradingPattern: config.tradingPattern || 'sequential'
+        tradingPattern: config.tradingPattern || 'sequential',
+        enableSniping: config.enableSniping,
+        snipingStopLossPercent: config.snipingStopLossPercent,
+        snipingSellPercent: config.snipingSellPercent,
       }
       
       try {
@@ -1444,7 +1674,7 @@ export async function updateMultipleWalletBalances(addresses: string[]): Promise
 }
 
 // Gather SOL from wallets back to main wallet
-export async function gatherSolFromWallets(addresses: string[]): Promise<{
+export async function gatherSolFromWallets(addresses: string[], options?: { reserveSol?: number; passes?: number }): Promise<{
   gathered: number
   failed: number
   errors: string[]
@@ -1457,6 +1687,12 @@ export async function gatherSolFromWallets(addresses: string[]): Promise<{
     const errors: string[] = []
     let totalSolGathered = 0
     
+    const reserveSol = Number(options?.reserveSol ?? DEFAULT_GATHER_RESERVE_SOL)
+    const sanitizedReserveSol = Math.max(0.00001, Math.min(0.01, Number.isFinite(reserveSol) ? reserveSol : DEFAULT_GATHER_RESERVE_SOL))
+    const reserveLamports = Math.floor(sanitizedReserveSol * 1e9)
+    const feeBufferLamports = Math.floor(GATHER_FEE_BUFFER_SOL * 1e9)
+    const maxPasses = Math.max(1, Math.min(3, Number(options?.passes ?? 2) || 2))
+
     for (const address of addresses) {
       try {
         const wallets = loadWarmedWallets()
@@ -1469,54 +1705,61 @@ export async function gatherSolFromWallets(addresses: string[]): Promise<{
         }
         
         const walletKp = Keypair.fromSecretKey(base58.decode(wallet.privateKey))
-        const balance = await connection.getBalance(walletKp.publicKey)
-        const balanceSol = balance / 1e9
-        
-        // Keep 0.001 SOL for rent exemption
-        const rentExemption = 0.001
-        const amountToTransfer = balanceSol - rentExemption
-        
-        if (amountToTransfer <= 0) {
-          console.log(`   ⚠️  ${address}: Insufficient balance (${balanceSol.toFixed(6)} SOL)`)
-          continue
+        let gatheredFromWallet = 0
+
+        for (let pass = 1; pass <= maxPasses; pass++) {
+          const balanceLamports = await connection.getBalance(walletKp.publicKey)
+          const amountLamports = balanceLamports - reserveLamports - feeBufferLamports
+
+          if (amountLamports <= 0) {
+            if (pass === 1) {
+              const balanceSol = balanceLamports / 1e9
+              console.log(`   ⚠️  ${address}: Insufficient balance (${balanceSol.toFixed(6)} SOL)`)
+            }
+            break
+          }
+
+          const amountToTransfer = amountLamports / 1e9
+          console.log(`   💰 Gathering ${amountToTransfer.toFixed(6)} SOL from ${address.substring(0, 8)}... (pass ${pass}/${maxPasses})`)
+
+          const latestBlockhash = await connection.getLatestBlockhash()
+          const transferMsg = new TransactionMessage({
+            payerKey: walletKp.publicKey,
+            recentBlockhash: latestBlockhash.blockhash,
+            instructions: [
+              SystemProgram.transfer({
+                fromPubkey: walletKp.publicKey,
+                toPubkey: mainKp.publicKey,
+                lamports: amountLamports
+              })
+            ]
+          }).compileToV0Message()
+
+          const transferTx = new VersionedTransaction(transferMsg)
+          transferTx.sign([walletKp])
+
+          const sig = await connection.sendTransaction(transferTx, { skipPreflight: false, maxRetries: 3 })
+          await connection.confirmTransaction(sig, 'confirmed')
+
+          gatheredFromWallet += amountToTransfer
+          totalSolGathered += amountToTransfer
+          console.log(`   ✅ Gathered ${amountToTransfer.toFixed(6)} SOL. Tx: https://solscan.io/tx/${sig}`)
+
+          await sleep(400)
         }
-        
-        console.log(`   💰 Gathering ${amountToTransfer.toFixed(6)} SOL from ${address.substring(0, 8)}...`)
-        
-        const latestBlockhash = await connection.getLatestBlockhash()
-        const transferMsg = new TransactionMessage({
-          payerKey: walletKp.publicKey,
-          recentBlockhash: latestBlockhash.blockhash,
-          instructions: [
-            SystemProgram.transfer({
-              fromPubkey: walletKp.publicKey,
-              toPubkey: mainKp.publicKey,
-              lamports: Math.floor(amountToTransfer * 1e9)
-            })
-          ]
-        }).compileToV0Message()
-        
-        const transferTx = new VersionedTransaction(transferMsg)
-        transferTx.sign([walletKp])
-        
-        const sig = await connection.sendTransaction(transferTx, { skipPreflight: false, maxRetries: 3 })
-        await connection.confirmTransaction(sig, 'confirmed')
-        
-        totalSolGathered += amountToTransfer
-        gathered++
+
+        if (gatheredFromWallet > 0) {
+          gathered++
+        }
         
         // Update balance in wallet record
         const walletIndex = wallets.findIndex(w => w.address === address)
         if (walletIndex >= 0) {
-          wallets[walletIndex].solBalance = rentExemption
+          const remainingLamports = await connection.getBalance(walletKp.publicKey)
+          wallets[walletIndex].solBalance = remainingLamports / 1e9
           wallets[walletIndex].lastBalanceUpdate = new Date().toISOString()
           saveWarmedWallets(wallets)
         }
-        
-        console.log(`   ✅ Gathered ${amountToTransfer.toFixed(6)} SOL. Tx: https://solscan.io/tx/${sig}`)
-        
-        // Small delay between transfers
-        await sleep(1000)
       } catch (error: any) {
         failed++
         errors.push(`${address}: ${error.message}`)

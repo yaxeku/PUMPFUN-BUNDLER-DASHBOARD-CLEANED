@@ -32,6 +32,7 @@ import {
   ExclamationTriangleIcon as ExclamationTriangleIconSolid
 } from '@heroicons/react/24/solid';
 import TokenLaunch from './components/TokenLaunch';
+import PumpExistingToken from './components/PumpExistingToken';
 import HolderWallets from './components/HolderWallets';
 import Settings from './components/Settings';
 import WalletWarming from './components/WalletWarming';
@@ -145,8 +146,18 @@ function App() {
 
   const requiredSatisfied = isRequiredSatisfied();
 
+  const launchOwnTokenEnabled = settings.LAUNCH_OWN_TOKEN === undefined
+    ? true
+    : (settings.LAUNCH_OWN_TOKEN === 'true' || settings.LAUNCH_OWN_TOKEN === true);
+
   const tabs = [
-    { id: 'launch', name: 'Launch Token', icon: RocketLaunchIcon, iconSolid: RocketLaunchIconSolid, component: TokenLaunch },
+    {
+      id: 'launch',
+      name: launchOwnTokenEnabled ? 'Launch Token' : 'Pump Existing Token',
+      icon: RocketLaunchIcon,
+      iconSolid: RocketLaunchIconSolid,
+      component: launchOwnTokenEnabled ? TokenLaunch : PumpExistingToken,
+    },
     { id: 'holders', name: 'Trading Terminal', icon: UserGroupIcon, iconSolid: UserGroupIconSolid, component: HolderWallets },
     { id: 'warming', name: 'Wallets', icon: CpuChipIcon, iconSolid: CpuChipIconSolid, component: WalletWarming },
     { id: 'settings', name: 'Settings', icon: Cog6ToothIcon, iconSolid: Cog6ToothIconSolid, component: Settings },
@@ -170,25 +181,23 @@ function App() {
   const isSettingsPage = activeTab === 'settings';
 
   return (
-    <div className="fixed inset-0 bg-black text-white overflow-hidden">
-      {/* Starry Background */}
-      <div className="starry-background"></div>
-      <div className="grid-overlay"></div>
+    <div className="fixed inset-0 bg-black text-white overflow-hidden xekku-theme">
+      <div className="absolute inset-0 bg-black" />
 
       {/* Main Container */}
       <div className="relative z-10 h-full flex flex-col">
         {/* Header */}
-        <header className="bg-black/80 backdrop-blur-sm border-b border-gray-900 sticky top-0 z-50">
+        <header className="bg-gray-950/90 backdrop-blur-sm border-b border-gray-800 sticky top-0 z-50">
           <div className="w-full px-6 py-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-8">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center">
+                  <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-blue-500 rounded-xl flex items-center justify-center">
                     <RocketLaunchIcon className="w-6 h-6 text-white" />
                   </div>
                   <div>
-                    <h1 className="text-lg font-bold text-white">Trencher Bundler</h1>
-                    <p className="text-xs text-gray-500">Pump.fun Token Launcher</p>
+                    <h1 className="text-lg font-bold text-white">Xekku Bundler/Pumper</h1>
+                    <p className="text-xs text-gray-400">Pump Existing + Launch Control Panel</p>
                   </div>
                 </div>
                 <nav className="flex gap-1">
@@ -217,7 +226,7 @@ function App() {
                         onClick={() => setActiveTab('settings')}
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
                           activeTab === 'settings'
-                            ? 'bg-purple-600 text-white'
+                            ? 'bg-cyan-600 text-white'
                             : 'text-gray-400 hover:text-white hover:bg-gray-900/50'
                         }`}
                       >
@@ -258,7 +267,7 @@ function App() {
                   placeholder="Search Settings"
                   value={settingsSearch}
                   onChange={(e) => setSettingsSearch(e.target.value)}
-                  className="w-full bg-gray-900/50 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                  className="w-full bg-gray-900/50 border border-gray-800 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500"
                 />
               </div>
 
@@ -280,7 +289,7 @@ function App() {
                             ? requiredSatisfied
                               ? 'bg-green-600 text-white border border-green-500'
                               : 'bg-red-600 text-white border border-red-500'
-                            : 'bg-purple-600 text-white'
+                            : 'bg-cyan-600 text-white'
                           : isRequired
                             ? requiredSatisfied
                               ? 'hover:bg-green-900/30 text-green-300 hover:text-green-200 border border-green-900/50'
@@ -328,7 +337,7 @@ function App() {
         </div>
 
         {/* Footer */}
-        <footer className="bg-black/80 backdrop-blur-sm border-t border-gray-900">
+        <footer className="bg-gray-950/90 backdrop-blur-sm border-t border-gray-800">
           <div className="w-full px-4 py-2">
             <div className="flex items-center justify-center gap-4">
               {/* All content centered */}
@@ -379,9 +388,9 @@ function App() {
                   <div className="w-px h-3 bg-gray-700"></div>
                   
                   {/* SOL - Highlighted */}
-                  <div className="flex items-center gap-1.5 px-2 py-0.5 bg-purple-900/30 rounded border border-purple-500/30 text-[10px]">
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 bg-cyan-900/30 rounded border border-cyan-500/30 text-[10px]">
                     <img src="/image/icons/sol_logo.svg" alt="SOL" className="w-3.5 h-3.5" />
-                    <span className="text-purple-300 font-semibold">SOL</span>
+                    <span className="text-cyan-300 font-semibold">SOL</span>
                     <span className="text-white font-bold">${marketData.sol.price.toFixed(2)}</span>
                     <span className={`font-semibold ${marketData.sol.change24h >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                       {marketData.sol.change24h >= 0 ? '^' : 'v'}{Math.abs(marketData.sol.change24h).toFixed(1)}%

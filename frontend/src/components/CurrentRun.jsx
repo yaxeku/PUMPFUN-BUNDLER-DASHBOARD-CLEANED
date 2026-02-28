@@ -1,13 +1,27 @@
 import { useState, useEffect } from 'react';
 import apiService from '../services/api';
+import { getErrorMessage } from '../utils/errorHandling';
 
 export default function CurrentRun() {
   const [currentRun, setCurrentRun] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
 
   useEffect(() => {
-    loadCurrentRun();
-    const interval = setInterval(loadCurrentRun, 5000);
+    let isMounted = true;
+    let inFlight = false;
+
+    const safeLoad = async () => {
+      if (inFlight || !isMounted) return;
+      inFlight = true;
+      await loadCurrentRun();
+      inFlight = false;
+    };
+
+    safeLoad();
+    const interval = setInterval(safeLoad, 5000);
+
     return () => clearInterval(interval);
   }, []);
 
@@ -15,9 +29,12 @@ export default function CurrentRun() {
     try {
       const res = await apiService.getCurrentRun();
       setCurrentRun(res.data.data);
+      setErrorMessage('');
+      setLastUpdatedAt(new Date());
       setLoading(false);
     } catch (error) {
       console.error('Failed to load current run:', error);
+      setErrorMessage(getErrorMessage(error, 'Failed to load current run'));
       setLoading(false);
     }
   };
@@ -32,24 +49,40 @@ export default function CurrentRun() {
 
   if (!currentRun) {
     return (
-      <div className="bg-gray-900/50 rounded-lg p-6">
+      <div className="bg-gray-900/50 rounded-lg border border-gray-800 p-6">
         <h2 className="text-2xl font-bold mb-4 text-white">📝 Current Run Info</h2>
+        {errorMessage && (
+          <div className="mb-4 p-3 rounded-lg border border-red-700/50 bg-red-900/20 text-red-200 text-sm">
+            {errorMessage}
+          </div>
+        )}
         <p className="text-gray-500">No token launched yet.</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-gray-900/50 rounded-lg p-6">
+    <div className="bg-gray-900/50 rounded-lg border border-gray-800 p-6">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-white">📝 Current Run Info</h2>
-        <button
-          onClick={loadCurrentRun}
-          className="px-4 py-2 bg-gray-900/50 hover:bg-gray-800 text-white rounded-lg transition-colors"
-        >
-          🔄 Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {lastUpdatedAt && (
+            <span className="text-xs text-gray-500">Updated {lastUpdatedAt.toLocaleTimeString()}</span>
+          )}
+          <button
+            onClick={loadCurrentRun}
+            className="px-4 py-2 bg-gray-900/50 hover:bg-gray-800 text-white rounded-lg transition-colors"
+          >
+            🔄 Refresh
+          </button>
+        </div>
       </div>
+
+      {errorMessage && (
+        <div className="mb-4 p-3 rounded-lg border border-red-700/50 bg-red-900/20 text-red-200 text-sm">
+          {errorMessage}
+        </div>
+      )}
 
       <div className="space-y-4">
         <div className="bg-gray-900/50 rounded-lg p-4">

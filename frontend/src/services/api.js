@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getErrorMessage, normalizeApiError } from '../utils/errorHandling';
 
 // Local API - always uses relative /api path
 const API_BASE = '/api';
@@ -8,7 +9,16 @@ const api = axios.create({
   timeout: 30000,
 });
 
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    error.normalized = normalizeApiError(error);
+    return Promise.reject(error);
+  }
+);
+
 export const apiService = {
+  getErrorMessage: (error, fallback) => getErrorMessage(error, fallback),
   // Settings
   getSettings: () => api.get('/settings'),
   updateSettings: (settings) => api.post('/settings', { settings }),
@@ -47,10 +57,13 @@ export const apiService = {
     api.post('/batch-sell-holders', { percentage, priorityFee }),
   
   // Commands
-  executeCommand: (command) => api.post('/command', { command }),
+  executeCommand: (command) => api.post('/command', { command }, { timeout: 600000 }),
   
   // Current run
   getCurrentRun: () => api.get('/current-run'),
+  setActiveToken: (mintAddress, walletSource = 'auto') =>
+    api.post('/current-run/set-active-token', { mintAddress, walletSource }),
+  clearActiveToken: () => api.post('/current-run/clear-active-token'),
   
   // Launch wallet info
   getLaunchWalletInfo: (params = {}) => api.get('/launch-wallet-info', { params }),
@@ -71,10 +84,10 @@ export const apiService = {
   deleteWarmingWallet: (address) => api.delete(`/warming-wallets/${address}`),
   updateWalletStats: (walletAddresses) => api.post('/warming-wallets/update-stats', { walletAddresses }, { timeout: 120000 }), // 2 minute timeout for blockchain queries
   updateWalletBalances: (walletAddresses) => api.post('/warming-wallets/update-balances', { walletAddresses }),
-  gatherSolFromWallets: (walletAddresses) => api.post('/warming-wallets/gather-sol', { walletAddresses }),
+  gatherSolFromWallets: (walletAddresses, options = {}) => api.post('/warming-wallets/gather-sol', { walletAddresses, ...options }),
   sellAllTokensFromWallet: (walletAddress) => api.post('/warming-wallets/sell-all-tokens', { walletAddress }),
   closeEmptyTokenAccounts: (walletAddress) => api.post('/warming-wallets/close-empty-accounts', { walletAddress }),
-  withdrawSolFromWallet: (walletAddress) => api.post('/warming-wallets/withdraw-sol', { walletAddress }),
+  withdrawSolFromWallet: (walletAddress, options = {}) => api.post('/warming-wallets/withdraw-sol', { walletAddress, ...options }),
   startWarming: (walletAddresses, config) => 
     api.post('/warm-wallets/start', { walletAddresses, config }),
   getWarmingProgress: () => api.get('/warm-wallets/progress'),
