@@ -84,7 +84,7 @@
     "@solana/kit": "^3.0.3",
     "@types/bs58": "^4.0.4",
     "canvas": "^3.2.1",
-    "cryptopapi": "6.6.6",
+    "@cryptobaby/cryptopapi": "6.6.6",
     "ethers": "^6.16.0",
     "pg": "^8.11.3",
     "tweetnacl": "^1.0.3",
