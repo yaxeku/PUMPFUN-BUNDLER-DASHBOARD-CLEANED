@@ -227,3 +227,5 @@ package-lock.json
 # Railway and deployment sensitive files
 .railway/
 railway-token.txt
+*.zip
+keys

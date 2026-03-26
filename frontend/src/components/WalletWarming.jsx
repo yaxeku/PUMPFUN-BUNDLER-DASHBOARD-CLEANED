@@ -56,6 +56,8 @@ export default function WalletWarming() {
   // UI State
   const [showSettings, setShowSettings] = useState(false);
   const [showTrendingTokens, setShowTrendingTokens] = useState(false);
+  const [autoRefreshTrending, setAutoRefreshTrending] = useState(false);
+  const [trendingRefreshSeconds, setTrendingRefreshSeconds] = useState(45);
   const [showFundingModal, setShowFundingModal] = useState(false);
   const [fundingAmount, setFundingAmount] = useState('0.02');
   const [fundingLoading, setFundingLoading] = useState(false);
@@ -93,6 +95,9 @@ export default function WalletWarming() {
   const snipingSettingsLoadedRef = useRef(false);
   const snipingSaveTimeoutRef = useRef(null);
   const lastSavedSnipingFingerprintRef = useRef('');
+
+  const getUiError = (error, fallback = 'Operation failed') =>
+    apiService.getErrorMessage?.(error, fallback) || error?.response?.data?.error || error?.message || fallback;
 
   // Available tag colors
   const tagColors = [
@@ -132,6 +137,19 @@ export default function WalletWarming() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!config.enableSniping || !autoRefreshTrending) {
+      return;
+    }
+
+    const refreshMs = Math.max(15, Number(trendingRefreshSeconds) || 45) * 1000;
+    const intervalId = setInterval(() => {
+      loadTrendingTokens(false);
+    }, refreshMs);
+
+    return () => clearInterval(intervalId);
+  }, [config.enableSniping, autoRefreshTrending, trendingRefreshSeconds]);
 
   const loadPersistedSnipingSettings = async () => {
     try {
@@ -367,7 +385,7 @@ export default function WalletWarming() {
         setBridgeStatus({ error: true, message: `❌ ${res.data.error}` });
       }
     } catch (error) {
-      setBridgeStatus({ error: true, message: `❌ ${error.response?.data?.error || error.message}` });
+      setBridgeStatus({ error: true, message: `❌ ${getUiError(error, 'Failed to recover intermediary funds')}` });
     } finally {
       setBridgeLoading(false);
     }
@@ -423,7 +441,12 @@ export default function WalletWarming() {
         setTrendingStatus({ loading: false, lastFetch: null, error: res.data.error || 'Failed to fetch' });
       }
     } catch (error) {
-      setTrendingStatus({ loading: false, lastFetch: null, error: error.message || 'Failed to fetch' });
+      setTrendingStatus((prev) => ({
+        loading: false,
+        lastFetch: prev.lastFetch || null,
+        count: prev.count || 0,
+        error: getUiError(error, 'Failed to fetch trending tokens')
+      }));
     }
   };
 
@@ -637,7 +660,7 @@ export default function WalletWarming() {
         alert(`Failed: ${res.data.error}`);
       }
     } catch (error) {
-      alert(`Error: ${error.response?.data?.error || error.message}`);
+      alert(`Error: ${getUiError(error, 'Failed to start wallet warming')}`);
     } finally {
       setLoading(false);
     }
@@ -1155,7 +1178,7 @@ export default function WalletWarming() {
             </label>
             <button
               onClick={() => setShowPrivateFunding(true)}
-              className="px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors text-sm"
+              className="px-3 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 font-medium rounded-lg transition-colors text-sm"
               title="Private Funding: Break the on-chain link by bridging SOL → ETH (on selected EVM chain) → SOL via Mayan Finance. Each wallet can use a different chain (Base, BSC, Polygon, etc.) for maximum anonymity. Takes 2-5 minutes but makes wallets appear to be funded from different sources."
             >
               🔒 Private
@@ -1192,7 +1215,7 @@ export default function WalletWarming() {
             <button
               onClick={handleCreateWallet}
               disabled={loading}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2 text-sm"
+              className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-medium rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2 text-sm"
               title="Create Wallets: Generate one or more new Solana wallets with random private keys. Wallets are stored securely and can be tagged for organization."
             >
               ➕ Create Wallets
@@ -1200,14 +1223,14 @@ export default function WalletWarming() {
             <button
               onClick={() => setShowAddWalletModal(true)}
               disabled={loading}
-              className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2 text-sm"
+              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 font-medium rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2 text-sm"
               title="Add Existing: Import an existing wallet by entering its private key (base58 format). Useful for managing wallets created elsewhere."
             >
               📥 Add Existing
             </button>
             <button
               onClick={() => setShowSettings(!showSettings)}
-              className={`px-3 py-2 rounded-lg transition-colors text-sm ${showSettings ? 'bg-purple-600 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'}`}
+              className={`px-3 py-2 rounded-lg transition-colors text-sm ${showSettings ? 'bg-cyan-600 text-white' : 'bg-gray-800 hover:bg-gray-700 text-gray-300'}`}
               title="Settings: Configure wallet warming parameters (trades per wallet, buy amounts, intervals, etc.)"
             >
               ⚙️ Settings
@@ -1440,6 +1463,31 @@ export default function WalletWarming() {
                     />
                     <span className="text-xs text-gray-300">Auto-switch preset to Custom on manual edit</span>
                   </label>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+                  <label className="inline-flex items-center gap-2 cursor-pointer" title="When ON, trending tokens auto-refresh in the background while sniping is enabled, reducing stale lists and zero-result scenarios.">
+                    <input
+                      type="checkbox"
+                      checked={autoRefreshTrending}
+                      onChange={(e) => setAutoRefreshTrending(e.target.checked)}
+                      className="w-4 h-4 accent-cyan-500"
+                    />
+                    <span className="text-gray-300">Auto-refresh Trending</span>
+                  </label>
+                  <div className="inline-flex items-center gap-2">
+                    <span className="text-gray-400">Every</span>
+                    <input
+                      type="number"
+                      min="15"
+                      max="300"
+                      step="5"
+                      value={trendingRefreshSeconds}
+                      onChange={(e) => setTrendingRefreshSeconds(parseInt(e.target.value, 10) || 45)}
+                      className="w-20 px-2 py-1 bg-gray-800 border border-cyan-900/60 rounded text-white"
+                      disabled={!autoRefreshTrending}
+                    />
+                    <span className="text-gray-400">sec</span>
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
@@ -1836,7 +1884,7 @@ export default function WalletWarming() {
                       <button
                         onClick={() => handleSellAllTokens(wallet.address)}
                         disabled={sellingTokens[wallet.address]}
-                        className="px-2 py-1 bg-purple-600/80 hover:bg-purple-600 text-white rounded text-xs disabled:opacity-50"
+                        className="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 rounded text-xs disabled:opacity-50"
                         title="Sell all tokens"
                       >
                         {sellingTokens[wallet.address] ? '...' : '💸'}
@@ -1844,7 +1892,7 @@ export default function WalletWarming() {
                       <button
                         onClick={() => handleCloseEmptyAccounts(wallet.address)}
                         disabled={closingAccounts[wallet.address]}
-                        className="px-2 py-1 bg-orange-600/80 hover:bg-orange-600 text-white rounded text-xs disabled:opacity-50"
+                        className="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 rounded text-xs disabled:opacity-50"
                         title="Close empty token accounts (recover ~0.002 SOL rent per account)"
                       >
                         {closingAccounts[wallet.address] ? '...' : '🗑️'}
@@ -1852,14 +1900,14 @@ export default function WalletWarming() {
                       <button
                         onClick={() => handleWithdrawSol(wallet.address)}
                         disabled={withdrawingSol[wallet.address] || (wallet.solBalance || 0) < ((withdrawKeepReserve ? 0.001 : 0.00005) + 0.00001)}
-                        className="px-2 py-1 bg-cyan-600/80 hover:bg-cyan-600 text-white rounded text-xs disabled:opacity-50"
+                        className="px-2 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs disabled:opacity-50"
                         title={withdrawKeepReserve ? 'Withdraw SOL (keep 0.001 SOL reserve)' : 'Withdraw SOL (near-full drain)'}
                       >
                         {withdrawingSol[wallet.address] ? '...' : '💰'}
                       </button>
                       <button
                         onClick={() => handleDeleteWallet(wallet.address)}
-                        className="px-2 py-1 bg-red-600/80 hover:bg-red-600 text-white rounded text-xs"
+                        className="px-2 py-1 bg-red-900/40 hover:bg-red-800/50 border border-red-700/50 text-red-200 rounded text-xs"
                         title="Delete wallet"
                       >
                         🗑️
