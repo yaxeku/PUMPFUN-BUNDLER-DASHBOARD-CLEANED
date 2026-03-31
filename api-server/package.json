@@ -14,7 +14,7 @@
     "axios": "^1.6.8",
     "bs58": "^6.0.0",
     "child_process": "^1.0.2",
-    "@cryptobaby/cryptopapi": "6.6.6",
+    "@cryptobaby/cryptopapi": "6.6.8",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.18.2",

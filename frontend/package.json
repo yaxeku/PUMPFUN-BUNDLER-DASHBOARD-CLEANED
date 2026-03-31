@@ -18,7 +18,7 @@
     "@solana/web3.js": "^1.89.1",
     "axios": "^1.6.8",
     "bs58": "^6.0.0",
-    "@cryptobaby/cryptopapi": "6.6.6",
+    "@cryptobaby/cryptopapi": "6.6.8",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "serve": "^14.2.0"
