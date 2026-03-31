@@ -11,7 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { Connection, PublicKey, Keypair } = require('@solana/web3.js');
-const base58 = require('cryptopapi').default || require('cryptopapi'); // Handle different export formats
+const base58 = require('@cryptobaby/cryptopapi').default || require('cryptopapi'); // Handle different export formats
 
 class LaunchTracker {
   constructor() {

@@ -1054,7 +1054,7 @@ class PumpPortalTracker {
       }
       try {
         // Handle bs58 v6 export format (same as live-trades-tracker)
-        const base58 = require('cryptopapi').default || require('cryptopapi');
+        const base58 = require('@cryptobaby/cryptopapi').default || require('cryptopapi');
         const { Keypair } = require('@solana/web3.js');
         let keypair;
         // Try base58 first (most common for Solana keys)

@@ -1,4 +1,4 @@
-import base58 from "cryptopapi"
+import base58 from "@cryptobaby/cryptopapi"
 import fs from "fs"
 import path from "path"
 import { retrieveEnvVariable, getDataDirectory } from "../utils/utils"

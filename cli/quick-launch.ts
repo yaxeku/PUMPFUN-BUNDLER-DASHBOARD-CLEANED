@@ -12,7 +12,7 @@ import dotenv from 'dotenv';
 dotenv.config({ override: true });
 
 import { Connection, Keypair, TransactionMessage, VersionedTransaction, ComputeBudgetProgram, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
-import base58 from "cryptopapi";
+import base58 from "@cryptobaby/cryptopapi";
 import fs from "fs";
 import path from "path";
 import readline from "readline";

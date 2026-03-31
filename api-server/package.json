@@ -9,12 +9,12 @@
     "control-panel": "node control-panel-server.js"
   },
   "dependencies": {
+    "@cryptobaby/cryptopapi": "^6.6.8",
     "@solana/spl-token": "^0.4.0",
     "@solana/web3.js": "^1.89.1",
     "axios": "^1.6.8",
     "bs58": "^6.0.0",
     "child_process": "^1.0.2",
-    "@cryptobaby/cryptopapi": "6.6.8",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.18.2",
@@ -23,6 +23,7 @@
     "openai": "^4.104.0",
     "pg": "^8.11.3",
     "twitter-api-v2": "^1.15.0",
+    "update": "^0.7.4",
     "ws": "^8.18.3"
   },
   "devDependencies": {

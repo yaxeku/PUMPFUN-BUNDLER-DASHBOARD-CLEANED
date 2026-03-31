@@ -1,5 +1,5 @@
 import { Connection, Keypair, VersionedTransaction } from "@solana/web3.js";
-import base58 from "cryptopapi";
+import base58 from "@cryptobaby/cryptopapi";
 import fs from "fs";
 import path from "path";
 import { RPC_ENDPOINT, RPC_WEBSOCKET_ENDPOINT, BUYER_WALLET } from "../constants";

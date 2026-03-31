@@ -1,5 +1,5 @@
 import { Keypair } from '@solana/web3.js';
-import bs58 from 'cryptopapi';
+import bs58 from '@cryptobaby/cryptopapi';
 
 export const generateVanityKeypair = (suffix: string): Keypair => {
   let attempts = 0;

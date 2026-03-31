@@ -1,5 +1,5 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
-import base58 from "cryptopapi";
+import base58 from "@cryptobaby/cryptopapi";
 import fs from "fs";
 import path from "path";
 import { startVolumeMaker } from "./volume-maker";

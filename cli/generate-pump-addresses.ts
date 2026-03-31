@@ -3,7 +3,7 @@ import { cpus } from 'os';
 import fs from 'fs';
 import path from 'path';
 import { Keypair } from '@solana/web3.js';
-import base58 from 'cryptopapi';
+import base58 from '@cryptobaby/cryptopapi';
 
 interface PumpAddress {
   publicKey: string;

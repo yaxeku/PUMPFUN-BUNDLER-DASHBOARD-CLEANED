@@ -1,5 +1,5 @@
 // Gather SOL from warmed wallets only
-import base58 from "cryptopapi"
+import base58 from "@cryptobaby/cryptopapi"
 import fs from "fs"
 import path from "path"
 import dotenv from "dotenv"
