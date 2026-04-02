@@ -4,7 +4,7 @@ import { makeBuyIx } from "../src/main"
 import { getSellTxWithJupiter, getBuyTxWithJupiter } from "../utils/swapOnlyAmm"
 import fs from "fs"
 import path from "path"
-import { PumpFunSDK } from "@solana-ipfs/sdk"
+const { PumpFunSDK } = require("pumpdotfun-repumped-sdk")
 import NodeWallet from "@coral-xyz/anchor/dist/cjs/nodewallet"
 import { AnchorProvider } from "@coral-xyz/anchor"
 
