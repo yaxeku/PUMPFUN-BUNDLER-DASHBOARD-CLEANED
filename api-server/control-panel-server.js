@@ -65,6 +65,22 @@ const runtimeHealth = {
   lastUnhandledRejection: null,
 };
 
+// Ensure keys/pump-addresses.json exists for address pool logic
+const pumpAddressesDir = path.join(__dirname, '..', 'keys');
+const pumpAddressesFile = path.join(pumpAddressesDir, 'pump-addresses.json');
+try {
+  if (!fs.existsSync(pumpAddressesDir)) {
+    fs.mkdirSync(pumpAddressesDir, { recursive: true });
+    console.log('[API Server] Created missing keys directory:', pumpAddressesDir);
+  }
+  if (!fs.existsSync(pumpAddressesFile)) {
+    fs.writeFileSync(pumpAddressesFile, '[]', 'utf8');
+    console.log('[API Server] Created missing pump-addresses.json:', pumpAddressesFile);
+  }
+} catch (err) {
+  console.error('[API Server] Failed to initialize keys/pump-addresses.json:', err.message, err.stack);
+}
+
 // Determine project root - handles both local and Railway deployments
 // On Railway with api-server as root: __dirname = /app, project files are in /app
 // Locally: __dirname = .../goat-prod/api-server, project root is ..
@@ -454,10 +470,34 @@ function broadcastProgress(type, data) {
   });
 }
 
+// Helper to normalize URL string value (trim CRLF etc)
+const normalizeUrl = (value) => {
+  if (!value || typeof value !== 'string') return '';
+  return value.trim().replace(/\r|\n/g, '');
+};
+
 // Helper to get RPC connection
 const getConnection = () => {
-  const rpcEndpoint = process.env.RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com';
-  return new Connection(rpcEndpoint, { commitment: 'confirmed' });
+  const rpcEndpoint = normalizeUrl(process.env.RPC_ENDPOINT || process.env.RPC_URL || process.env.HELIUS_RPC_URL || 'https://api.mainnet-beta.solana.com');
+  const rpcWsEndpoint = normalizeUrl(process.env.RPC_WEBSOCKET_ENDPOINT || '');
+
+  if (!rpcEndpoint) {
+    throw new Error('RPC_ENDPOINT is not set or is empty. Please set it in .env to your Helius/QuickNode/Alchemy URL.');
+  }
+
+  if (!/^https?:\/\//i.test(rpcEndpoint)) {
+    throw new Error(`RPC_ENDPOINT is not a valid URL: ${rpcEndpoint}`);
+  }
+
+  console.log('[getConnection] Using RPC_ENDPOINT:', rpcEndpoint);
+  if (rpcWsEndpoint) {
+    console.log('[getConnection] Using RPC_WEBSOCKET_ENDPOINT:', rpcWsEndpoint);
+  }
+
+  return new Connection(rpcEndpoint, {
+    wsEndpoint: rpcWsEndpoint || undefined,
+    commitment: 'confirmed'
+  });
 };
 
 // Helper to read .env file
@@ -2067,7 +2107,24 @@ function invalidateAllBalanceCaches() {
 
 // Batch fetch balances (more efficient than individual calls)
 async function batchFetchBalances(walletKeys, mintAddress) {
-  const connection = getConnection();
+  let connection;
+  try {
+    connection = getConnection();
+  } catch (rpcError) {
+    console.error('[Batch Fetch Balances] getConnection error:', rpcError.message || rpcError);
+    if (rpcError.message && rpcError.message.includes('Invalid API key')) {
+      const fallbackRpc = process.env.RPC_FALLBACK_ENDPOINT;
+      if (fallbackRpc) {
+        console.log('[Batch Fetch Balances] Trying fallback RPC endpoint:', fallbackRpc);
+        connection = new Connection(normalizeUrl(fallbackRpc), { commitment: 'confirmed' });
+      } else {
+        throw new Error(`RPC failed and no fallback configured: ${rpcError.message}`);
+      }
+    } else {
+      throw rpcError;
+    }
+  }
+  
   const wallets = [];
   const now = Date.now();
   
@@ -2079,7 +2136,25 @@ async function batchFetchBalances(walletKeys, mintAddress) {
   
   // Batch fetch SOL balances using getMultipleAccountsInfo (single RPC call)
   const publicKeys = walletData.map(w => w.kp.publicKey);
-  const solAccountInfos = await connection.getMultipleAccountsInfo(publicKeys);
+  let solAccountInfos;
+  try {
+    solAccountInfos = await connection.getMultipleAccountsInfo(publicKeys);
+  } catch (rpcError) {
+    console.error('[Batch Fetch Balances] getMultipleAccountsInfo error:', rpcError.message || rpcError);
+    if (rpcError.message && rpcError.message.includes('Invalid API key')) {
+      const fallbackRpc = process.env.RPC_FALLBACK_ENDPOINT;
+      if (fallbackRpc) {
+        console.log('[Batch Fetch Balances] Trying fallback RPC for getMultipleAccountsInfo:', fallbackRpc);
+        const fallbackConnection = new Connection(normalizeUrl(fallbackRpc), { commitment: 'confirmed' });
+        solAccountInfos = await fallbackConnection.getMultipleAccountsInfo(publicKeys);
+        connection = fallbackConnection; // Update connection for subsequent calls
+      } else {
+        throw new Error(`RPC failed and no fallback configured: ${rpcError.message}`);
+      }
+    } else {
+      throw rpcError;
+    }
+  }
   
   // Only fetch token balances if mintAddress is provided
   let tokenAccountMap = new Map();
@@ -2095,10 +2170,32 @@ async function batchFetchBalances(walletKeys, mintAddress) {
       
       // Batch fetch token account info (use getParsedAccountInfo in parallel)
       const validTokenAccounts = tokenAccountAddresses.filter(addr => addr !== null);
-      const tokenAccountPromises = validTokenAccounts.map(addr => 
-        connection.getParsedAccountInfo(addr).catch(() => null)
-      );
-      const tokenAccountInfos = await Promise.all(tokenAccountPromises);
+      let tokenAccountInfos;
+      try {
+        const tokenAccountPromises = validTokenAccounts.map(addr => 
+          connection.getParsedAccountInfo(addr).catch(() => null)
+        );
+        tokenAccountInfos = await Promise.all(tokenAccountPromises);
+      } catch (rpcError) {
+        console.error('[Batch Fetch Balances] getParsedAccountInfo error:', rpcError.message || rpcError);
+        if (rpcError.message && rpcError.message.includes('Invalid API key')) {
+          const fallbackRpc = process.env.RPC_FALLBACK_ENDPOINT;
+          if (fallbackRpc) {
+            console.log('[Batch Fetch Balances] Trying fallback RPC for getParsedAccountInfo:', fallbackRpc);
+            const fallbackConnection = new Connection(normalizeUrl(fallbackRpc), { commitment: 'confirmed' });
+            const tokenAccountPromises = validTokenAccounts.map(addr => 
+              fallbackConnection.getParsedAccountInfo(addr).catch(() => null)
+            );
+            tokenAccountInfos = await Promise.all(tokenAccountPromises);
+          } else {
+            // If fallback fails, just continue with empty token balances
+            console.warn('[Batch Fetch Balances] Fallback RPC not available, skipping token balances');
+            tokenAccountInfos = [];
+          }
+        } else {
+          throw rpcError;
+        }
+      }
       
       // Create a map for quick lookup
       validTokenAccounts.forEach((addr, idx) => {
@@ -3493,9 +3590,33 @@ app.get('/api/launch-wallet-info', async (req, res) => {
     
     const fundingWalletAddress = fundingWalletKp.publicKey.toBase58();
     
-    // Get funding wallet balance
-    const connection = new Connection(env.RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com');
-    const fundingBalance = await connection.getBalance(fundingWalletKp.publicKey);
+    // Get funding wallet balance with fallback logic
+    let connection;
+    let fundingBalance;
+    try {
+      connection = getConnection();
+      fundingBalance = await connection.getBalance(fundingWalletKp.publicKey);
+    } catch (rpcError) {
+      console.error('[Launch Wallet Info] RPC getBalance error:', rpcError.message || rpcError);
+      if (rpcError.message && rpcError.message.includes('Invalid API key')) {
+        const fallbackRpc = process.env.RPC_FALLBACK_ENDPOINT;
+        if (fallbackRpc) {
+          console.log('[Launch Wallet Info] Trying fallback RPC endpoint:', fallbackRpc);
+          try {
+            connection = new Connection(normalizeUrl(fallbackRpc), { commitment: 'confirmed' });
+            fundingBalance = await connection.getBalance(fundingWalletKp.publicKey);
+            console.log('[Launch Wallet Info] Fallback balance fetched successfully');
+          } catch (fallbackError) {
+            console.error('[Launch Wallet Info] Fallback RPC also failed:', fallbackError.message || fallbackError);
+            throw new Error(`Both primary and fallback RPC failed. Primary: ${rpcError.message}. Fallback: ${fallbackError.message}`);
+          }
+        } else {
+          throw new Error(`RPC failed and no fallback configured: ${rpcError.message}`);
+        }
+      } else {
+        throw rpcError;
+      }
+    }
     
     // Creator/DEV wallet info
     // PRIORITY 0: USE_FUNDING_AS_BUYER=true → Use funding wallet as DEV (same wallet, no separate funding)
@@ -3866,22 +3987,51 @@ app.get('/api/deployer-wallet', async (req, res) => {
       console.log('[Deployer Wallet] Public key derived:', publicKey.substring(0, 8) + '...');
       
       // Get balance from blockchain
-      const connection = getConnection();
+      let connection = getConnection();
       console.log('[Deployer Wallet] Fetching balance from RPC...');
-      const balance = await connection.getBalance(kp.publicKey);
+      let balance;
+      try {
+        balance = await connection.getBalance(kp.publicKey);
+      } catch (rpcError) {
+        console.error('[Deployer Wallet] RPC getBalance error:', rpcError.message || rpcError);
+        if (rpcError.message && rpcError.message.includes('Invalid API key')) {
+          const fallbackRpc = process.env.RPC_FALLBACK_ENDPOINT;
+          if (fallbackRpc) {
+            console.log('[Deployer Wallet] Trying fallback RPC endpoint:', fallbackRpc);
+            try {
+              const fallbackConnection = new Connection(normalizeUrl(fallbackRpc), { commitment: 'confirmed' });
+              balance = await fallbackConnection.getBalance(kp.publicKey);
+              console.log('[Deployer Wallet] Fallback balance fetched successfully');
+            } catch (fallbackError) {
+              console.error('[Deployer Wallet] Fallback RPC also failed:', fallbackError.message || fallbackError);
+              throw new Error(`Both primary and fallback RPC failed. Primary: ${rpcError.message}. Fallback: ${fallbackError.message}`);
+            }
+          } else {
+            throw new Error(`RPC failed and no fallback configured: ${rpcError.message}`);
+          }
+        } else {
+          throw rpcError;
+        }
+      }
       console.log('[Deployer Wallet] Balance fetched:', balance / LAMPORTS_PER_SOL, 'SOL');
       
       // SECURITY: Only return public key and balance, NEVER the private key
-      res.json({
+      return res.json({
         success: true,
-        address: publicKey, // Only public key, never private key
+        address: publicKey,
         balance: balance / LAMPORTS_PER_SOL
       });
     } catch (error) {
       console.error('[Deployer Wallet] Error:', error);
-      res.status(500).json({ 
+      let errMsg = error.message;
+      if (errMsg.includes('Invalid API key') || errMsg.includes('401')) {
+        errMsg = 'Invalid Solana RPC API key. Check RPC_ENDPOINT / HELIUS key in .env';
+      } else if (errMsg.includes('Non-base58 character') || errMsg.includes('bad secret key size')) {
+        errMsg = 'Invalid PRIVATE_KEY format; check your private key value in .env';
+      }
+      return res.status(500).json({ 
         success: false, 
-        error: `Invalid PRIVATE_KEY format: ${error.message}` 
+        error: errMsg
       });
     }
   } catch (error) {
